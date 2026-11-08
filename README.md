@@ -65,6 +65,32 @@ tests/                pytest
 scripts/              environment check and one-off utilities
 ```
 
+## Database
+
+The schema lives in `domains/hk/schema.sql` and is applied by:
+
+```powershell
+uv run python scripts/init_db.py           # create tables + neuro_ro role
+uv run python scripts/init_db.py --reset   # drop schema public first, then recreate
+uv run python scripts/check_db.py          # Day 1 acceptance checks
+```
+
+`init_db.py` also creates the `neuro_ro` role from the credentials in
+`DB_URL_RO`, grants it `SELECT` on everything, forces
+`default_transaction_read_only=on` and sets a 5 s `statement_timeout`. Ingestion
+and `truth_sql` use `DB_URL_ADMIN`; the agent never sees that URL.
+
+14 tables, all following the reference implementation: `air_quality_station`,
+`hourly_station_air_quality`, `street`, `road_segment`,
+`hourly_road_segment_traffic`, `weather_station`, `hourly_station_weather`,
+`osm_feature`, `eia_project`, `eia_habitat`, `traffic_camera`,
+`sensitive_area`, `land_use_zone`, `building_height_control`.
+
+`check_db.py` proves the read-only role by attempting INSERT, UPDATE, DELETE,
+TRUNCATE, DROP, ALTER, CREATE TABLE and CREATE INDEX, expecting SQLSTATE 25006
+for each. It also asserts that geography columns return metres (1107 m for
+0.01 degrees of latitude) while a `::geometry` cast returns 0.01 degrees.
+
 ## Conventions
 
 - The agent only ever connects with the read-only `neuro_ro` role. Ingestion
@@ -91,4 +117,5 @@ scripts/              environment check and one-off utilities
 | Day | Deliverable | State |
 | --- | --- | --- |
 | 0 | scaffold, deps, compose, env check | done |
-| 1 | PostGIS schema, read-only role | next |
+| 1 | PostGIS schema, read-only role | done |
+| 2 | HK data ingestion | next |
