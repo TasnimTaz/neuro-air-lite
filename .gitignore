@@ -13,10 +13,10 @@ __pycache__/
 .ruff_cache/
 
 # --- data / artifacts ---
-data/
-runs/
-charts/
-ingest/cache/
+/data/
+/runs/
+/charts/
+/ingest/cache/
 *.log
 
 # --- os / editors ---

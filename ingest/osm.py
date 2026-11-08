@@ -272,8 +272,15 @@ def overpass(body: str, bbox: str, slug: str, is_raw: bool = False, refresh: boo
             )
             if response.status_code == 200:
                 data = response.json()
+                remark = data.get("remark")
                 elements = data.get("elements", [])
-                cache_path.write_text(json.dumps({"elements": elements}), encoding="utf-8")
+                if remark or not elements:
+                    log(f"  overpass {slug:<16} remark={remark!r}, treating as failure (elements: {len(elements)})")
+                    time.sleep(5)
+                    continue
+                part_path = CACHE / f"overpass_{slug}.json.part"
+                part_path.write_text(json.dumps({"elements": elements}), encoding="utf-8")
+                part_path.replace(cache_path)
                 log(f"  overpass {slug:<16} {len(elements):>5} elements ({time.perf_counter() - started:.1f}s)")
                 return elements
             log(f"  overpass {slug:<16} HTTP {response.status_code}, retrying (endpoint: {endpoint})")
@@ -285,11 +292,15 @@ def overpass(body: str, bbox: str, slug: str, is_raw: bool = False, refresh: boo
 
 
 def load_overpass(raw, bbox: str, refresh: bool = False) -> int:
+    MIN_EXPECTED = {"schools": 1000, "hospitals": 50, "worship": 800, "taipo_buildings": 1000}
     feature_rows: list[tuple] = []
     area_rows: list[tuple] = []
 
     for body, slug, area_category, is_raw in OVERPASS_QUERIES:
         elements = overpass(body, bbox, slug, is_raw=is_raw, refresh=refresh)
+        min_required = MIN_EXPECTED.get(slug, 1)
+        if len(elements) < min_required:
+            raise RuntimeError(f"{slug}: got only {len(elements)} elements (< {min_required}), refusing to replace existing rows")
         query_features = 0
         query_areas = 0
         for element in elements:

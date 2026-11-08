@@ -96,6 +96,18 @@ def get_file(stamp: str, filename: str, refresh: bool) -> bytes:
     return fetch(url, filename=filename, refresh=refresh, timeout=900)
 
 
+def num(x: str) -> float | None:
+    x = x.strip()
+    if not x or x.lower() in ("n/a", "na", "-"):
+        return None
+    if x.lower() == "calm":
+        return 0.0
+    try:
+        return float(x)
+    except ValueError:
+        return None
+
+
 def collect_month(bundles: dict, archive: zipfile.ZipFile, start: date, end: date) -> None:
     """Fold one month of ten-minute snapshots into per-hour accumulators."""
     for name in sorted(archive.namelist()):
@@ -119,14 +131,15 @@ def collect_month(bundles: dict, archive: zipfile.ZipFile, start: date, end: dat
 
             bucket = bundles.setdefault(
                 (station, hour),
-                {"speed": 0.0, "n": 0, "gust": 0.0, "sin": 0.0, "cos": 0.0, "dirs": 0},
+                {"speed": 0.0, "n": 0, "gust": None, "sin": 0.0, "cos": 0.0, "dirs": 0},
             )
-            try:
-                bucket["speed"] += float(speed)
-                bucket["gust"] = max(bucket["gust"], float(gust))
+            s, g = num(speed), num(gust)
+            if s is not None:
+                bucket["speed"] += s
                 bucket["n"] += 1
-            except ValueError:
-                pass  # "Calm" carries 0, but be defensive
+            if g is not None:
+                bucket["gust"] = g if bucket["gust"] is None else max(bucket["gust"], g)
+
             degrees = COMPASS.get(direction.strip().lower())
             if degrees is not None:
                 radians = math.radians(degrees)
@@ -175,7 +188,7 @@ def main(argv: list[str]) -> int:
                 if bucket["n"] == 0:
                     continue
                 speed = bucket["speed"] / bucket["n"] / 3.6  # km/h -> m/s
-                gust = bucket["gust"] / 3.6
+                gust = (bucket["gust"] / 3.6) if bucket["gust"] is not None else None
                 if bucket["dirs"]:
                     degrees = math.degrees(math.atan2(bucket["sin"], bucket["cos"])) % 360
                 else:
@@ -183,7 +196,7 @@ def main(argv: list[str]) -> int:
                 for code in codes_by_hko.get(hko_name, ()):
                     rows.append((
                         by_code[code], hour, degrees, round(speed, 3),
-                        round(gust, 3), sector(degrees),
+                        round(gust, 3) if gust is not None else None, sector(degrees),
                     ))
 
             sent = insert_rows(raw, "hourly_station_weather", WIND_COLUMNS, rows, on_conflict=WIND_UPSERT)

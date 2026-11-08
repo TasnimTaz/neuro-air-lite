@@ -79,7 +79,9 @@ def fetch(
             continue
 
         elapsed = time.perf_counter() - started
-        path.write_bytes(response.content)
+        part_path = CACHE / f"{filename}.part"
+        part_path.write_bytes(response.content)
+        part_path.replace(path)
         log(f"  fetched    {filename} ({len(response.content):,} B in {elapsed:.1f}s)")
         return response.content
 

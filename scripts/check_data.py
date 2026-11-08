@@ -413,8 +413,9 @@ def check_taipo_spatial(conn) -> None:
 
 
 def check_paper_sanity(conn) -> None:
-    """The values the plan gives for the Tai Po case study."""
-    print("\n-- paper sanity (Tai Po) --")
+    """The values the plan gives for the Tai Po case study (Algorithm 1)."""
+    print("\n-- paper sanity (Tai Po fire case study, Algorithm 1) --")
+    # 1. Single hour sanity at 2025-11-26 20:00 (peak NO2 hour during fire)
     row = conn.execute(
         text(
             "SELECT a.datetime, a.no2, a.o3, a.so2, a.co, a.pm10, a.pm2_5, a.aqhi "
@@ -429,26 +430,42 @@ def check_paper_sanity(conn) -> None:
 
     _, no2, o3, so2, co, pm10, pm2_5, aqhi = row
     if no2 is not None and abs(no2 - 123.2) < 0.05:
-        ok(f"NO2 = {no2} ug/m3 (paper: 123.2)")
+        ok(f"NO2 at 20:00 = {no2} ug/m3 (paper: 123.2)")
     else:
         fail(f"NO2 = {no2}, expected 123.2 (source or timezone is wrong)")
 
     print(f"       O3={o3} SO2={so2} CO={co} PM10={pm10} PM2.5={pm2_5} AQHI={aqhi}")
 
-    peak = conn.execute(
+    # 2. Algorithm 1: Pre-fire mean (2025-11-23 14:00 .. 2025-11-26 15:00) vs 24h post-fire peak
+    algo1 = conn.execute(
         text(
-            "SELECT a.pm2_5, a.datetime FROM hourly_station_air_quality a "
-            "JOIN air_quality_station s ON s.id = a.station_id "
-            "WHERE s.name_en = 'Tai Po' AND a.pm2_5 IS NOT NULL "
-            "ORDER BY a.pm2_5 DESC LIMIT 1"
+            "SELECT max(pm2_5) FILTER (WHERE datetime >= '2025-11-26 15:00' AND datetime < '2025-11-27 15:00') AS peak_pm25, "
+            "       avg(pm2_5) FILTER (WHERE datetime >= '2025-11-23 14:00' AND datetime < '2025-11-26 15:00') AS pre_pm25, "
+            "       max(no2) FILTER (WHERE datetime >= '2025-11-26 15:00' AND datetime < '2025-11-27 15:00') AS peak_no2, "
+            "       avg(no2) FILTER (WHERE datetime >= '2025-11-23 14:00' AND datetime < '2025-11-26 15:00') AS pre_no2 "
+            "FROM hourly_station_air_quality a JOIN air_quality_station s ON s.id = a.station_id "
+            "WHERE s.name_en = 'Tai Po' AND datetime >= '2025-11-23 14:00'"
         )
     ).first()
-    if peak is None:
-        fail("Tai Po has no PM2.5 values")
-    elif abs(peak[0] - 54.6) < 0.05:
-        ok(f"PM2.5 peak = {peak[0]} ug/m3 at {peak[1]} (paper: 54.6)")
+
+    if algo1 is None or algo1[0] is None:
+        fail("Algorithm 1 query returned no data for Tai Po")
     else:
-        warn(f"PM2.5 peak = {peak[0]} ug/m3 at {peak[1]}, paper quotes 54.6")
+        peak_pm25, pre_pm25, peak_no2, pre_no2 = algo1
+        ratio_pm25 = peak_pm25 / pre_pm25 if pre_pm25 else 0
+        ratio_no2 = peak_no2 / pre_no2 if pre_no2 else 0
+
+        # Check PM2.5 24h post-fire peak = 54.6 (~2.0x pre-fire mean)
+        if abs(peak_pm25 - 54.6) < 0.05:
+            ok(f"Tai Po 24h post-fire PM2.5 peak = {peak_pm25} ug/m3 ({ratio_pm25:.2f}x pre-fire mean {pre_pm25:.2f}; paper: 54.6, ~2.0x)")
+        else:
+            fail(f"Tai Po 24h post-fire PM2.5 peak = {peak_pm25}, expected 54.6")
+
+        # Check NO2 24h post-fire peak = 123.2 (~2.5x pre-fire mean)
+        if abs(peak_no2 - 123.2) < 0.05:
+            ok(f"Tai Po 24h post-fire NO2 peak = {peak_no2} ug/m3 ({ratio_no2:.2f}x pre-fire mean {pre_no2:.2f}; paper: 123.2, ~2.5x)")
+        else:
+            fail(f"Tai Po 24h post-fire NO2 peak = {peak_no2}, expected 123.2")
 
     tai_po_wx = weather_code(BY_CODE["taipo"])
     wind = conn.execute(
@@ -462,7 +479,7 @@ def check_paper_sanity(conn) -> None:
     if wind is None:
         warn(f"Tai Po 2025-11-26 20:00 has no weather row yet (code: {tai_po_wx})")
     else:
-        print(f"       Tai Po wind at 20:00: {wind[1]} m/s from {wind[2]:.0f} deg ({wind[3]})")
+        print(f"       Tai Po wind at 20:00: {wind[1]} m/s from {wind[2]:.0f} deg ({wind[3]}) (station: {tai_po_wx})")
 
 
 def main() -> int:
