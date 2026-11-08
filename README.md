@@ -76,6 +76,16 @@ scripts/              environment check and one-off utilities
 - Distances are in metres because location columns are `geography`; casting to
   `::geometry` silently switches to degrees.
 
+## Troubleshooting
+
+- `docker: command not found` in a terminal that was already open before the
+  install: close and reopen it. The installer appends
+  `C:\Program Files\Docker\Docker\resources\bin` to the user `PATH`.
+- `error getting credentials ... docker-credential-desktop` means the same
+  stale-`PATH` problem.
+- Ollama answers on `:11434` only after the desktop app (or `ollama serve`) is
+  running; start it once per reboot if it is not set to launch at login.
+
 ## Status
 
 | Day | Deliverable | State |
