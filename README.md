@@ -28,9 +28,13 @@ Copy-Item .env.example .env    # already present in a fresh checkout of this mac
 Start the database:
 
 ```powershell
-docker compose up -d
-docker compose ps              # wait for "healthy"
+.\scripts\dev_up.ps1           # starts Docker Desktop if needed, waits for healthy
+docker compose ps
 ```
+
+Docker Desktop does not reliably start with Windows, so `dev_up.ps1` checks the
+engine first instead of failing with `pipe not found`. Enable "Start Docker
+Desktop when you sign in" in its settings to make the script a no-op.
 
 Check everything wired up:
 
@@ -70,15 +74,28 @@ scripts/              environment check and one-off utilities
 The schema lives in `domains/hk/schema.sql` and is applied by:
 
 ```powershell
-uv run python scripts/init_db.py           # create tables + neuro_ro role
-uv run python scripts/init_db.py --reset   # drop schema public first, then recreate
-uv run python scripts/check_db.py          # Day 1 acceptance checks
+uv run python scripts/init_db.py               # create tables + neuro_ro role
+uv run python scripts/init_db.py --roles-only  # skip tables, refresh password + grants
+uv run python scripts/init_db.py --reset       # DROP schema public CASCADE first
+uv run python scripts/check_db.py              # Day 1 acceptance checks
 ```
+
+`--reset` destroys every ingested row, so after Day 2 use `--roles-only` when you
+only need the role and grants reapplied.
 
 `init_db.py` also creates the `neuro_ro` role from the credentials in
 `DB_URL_RO`, grants it `SELECT` on everything, forces
 `default_transaction_read_only=on` and sets a 5 s `statement_timeout`. Ingestion
-and `truth_sql` use `DB_URL_ADMIN`; the agent never sees that URL.
+and `truth_sql` use `DB_URL_ADMIN`; the agent never sees that URL. `domains/hk/db.py`
+is the only sanctioned way to build either engine (`make_ro_engine()` and
+`make_admin_engine()`); the read-only profile pins `pool_size=5`,
+`max_overflow=10`, `pool_pre_ping=True`, `connect_timeout=5` and passes
+`statement_timeout` as a startup option so a changed role default cannot lift it.
+
+The Postgres superuser password comes from `POSTGRES_PASSWORD` in `.env`
+(`docker compose` reads that file automatically). It only applies when the
+`pgdata` volume is first created; changing it later needs `ALTER USER` or
+`docker compose down -v`.
 
 14 tables, all following the reference implementation: `air_quality_station`,
 `hourly_station_air_quality`, `street`, `road_segment`,
@@ -86,10 +103,20 @@ and `truth_sql` use `DB_URL_ADMIN`; the agent never sees that URL.
 `osm_feature`, `eia_project`, `eia_habitat`, `traffic_camera`,
 `sensitive_area`, `land_use_zone`, `building_height_control`.
 
-`check_db.py` proves the read-only role by attempting INSERT, UPDATE, DELETE,
-TRUNCATE, DROP, ALTER, CREATE TABLE and CREATE INDEX, expecting SQLSTATE 25006
-for each. It also asserts that geography columns return metres (1107 m for
-0.01 degrees of latitude) while a `::geometry` cast returns 0.01 degrees.
+`check_db.py` proves the read-only role in two layers:
+
+1. INSERT, UPDATE, DELETE, TRUNCATE, DROP, ALTER, CREATE TABLE and CREATE INDEX
+   each fail with SQLSTATE 25006, the read-only transaction default.
+2. With `SET SESSION CHARACTERISTICS AS TRANSACTION READ WRITE` the same writes
+   fail with SQLSTATE 42501, so the GRANT layer is proven independently of the
+   session default.
+
+It also proves the timeout (`pg_sleep(6)` cancelled at 5.0 s with 57014), asserts
+that geography columns return metres (1107 m for 0.01 degrees of latitude) while
+a `::geometry` cast returns 0.01 degrees, and warns that `neuro_ro` can disable
+its own `statement_timeout` with `SET statement_timeout = 0` - no GRANT can stop
+that, so the real wall-clock guarantee has to come from the Day 10 process
+supervisor, not from Postgres.
 
 ## Conventions
 
@@ -101,6 +128,10 @@ for each. It also asserts that geography columns return metres (1107 m for
   the next midnight).
 - Distances are in metres because location columns are `geography`; casting to
   `::geometry` silently switches to degrees.
+- The Day 4 schema prompt must only describe tables that actually hold rows.
+  A query against an empty table returns a silent `0`, which is worse than an
+  error; `eia_*`, `traffic_camera`, `land_use_zone` and `building_height_control`
+  stay out until Day 2 populates them.
 
 ## Troubleshooting
 

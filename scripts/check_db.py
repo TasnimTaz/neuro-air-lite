@@ -10,12 +10,11 @@ or change structure. Exits non-zero on any failure.
 from __future__ import annotations
 
 import os
-import sys
+import time
 from pathlib import Path
 
 from dotenv import load_dotenv
 from sqlalchemy import create_engine, text
-from sqlalchemy.engine import make_url
 
 ROOT = Path(__file__).resolve().parents[1]
 ROLE = "neuro_ro"
@@ -61,6 +60,14 @@ def ok(msg: str) -> None:
 def fail(msg: str) -> None:
     print(f"[FAIL] {msg}")
     failures.append(msg)
+
+
+def warn(msg: str) -> None:
+    print(f"[warn] {msg}")
+
+
+def pgcode(exc: Exception) -> str | None:
+    return getattr(getattr(exc, "orig", None), "pgcode", None)
 
 
 def check_admin(admin_url: str) -> None:
@@ -168,12 +175,75 @@ def check_readonly(ro_url: str) -> None:
                 try:
                     conn.exec_driver_sql(statement)
                 except Exception as exc:  # noqa: BLE001
-                    code = getattr(getattr(exc, "orig", None), "pgcode", None)
-                    ok(f"{label} rejected ({code or exc.__class__.__name__})")
+                    ok(f"{label} rejected ({pgcode(exc) or exc.__class__.__name__})")
                 else:
                     fail(f"{label} was ALLOWED for {ROLE}")
                 finally:
                     conn.rollback()
+
+            # Everything above failed at 25006 (read-only transaction) before
+            # privileges were consulted, so it proves the session default but not
+            # the GRANT layer. Lift the default and confirm the grants refuse too.
+            conn.exec_driver_sql("SET SESSION CHARACTERISTICS AS TRANSACTION READ WRITE")
+            conn.commit()
+            for label, statement in (
+                ("INSERT", "INSERT INTO air_quality_station (name_en) VALUES ('test')"),
+                ("DELETE", "DELETE FROM air_quality_station"),
+                ("CREATE TABLE", "CREATE TABLE should_fail (id integer)"),
+            ):
+                try:
+                    conn.exec_driver_sql(statement)
+                except Exception as exc:  # noqa: BLE001
+                    code = pgcode(exc)
+                    if code == "42501":
+                        ok(f"{label} rejected by grants with read-only lifted (42501)")
+                    else:
+                        fail(f"{label} rejected with {code}, expected 42501 (grant layer)")
+                else:
+                    fail(f"{label} was ALLOWED once read-only was lifted")
+                finally:
+                    conn.rollback()
+    finally:
+        engine.dispose()
+
+
+def check_timeout(ro_url: str) -> None:
+    """Prove the 5 s cap is enforced, and check the role cannot lift it itself."""
+    engine = create_engine(ro_url, future=True, connect_args={"connect_timeout": 5})
+    try:
+        with engine.connect() as conn:
+            started = time.perf_counter()
+            try:
+                conn.exec_driver_sql("SELECT pg_sleep(6)")
+            except Exception as exc:  # noqa: BLE001
+                elapsed = time.perf_counter() - started
+                code = pgcode(exc)
+                if code == "57014" and elapsed < 8.0:
+                    ok(f"pg_sleep(6) cancelled after {elapsed:.1f}s (57014)")
+                else:
+                    fail(f"pg_sleep(6) failed with {code} after {elapsed:.1f}s, expected 57014")
+            else:
+                fail("pg_sleep(6) was NOT cancelled, statement_timeout is not enforced")
+            finally:
+                conn.rollback()
+
+            # statement_timeout is a user-settable GUC: the role can turn it off.
+            # No GRANT can prevent that, so this is a warning, not a failure.
+            try:
+                conn.exec_driver_sql("SET statement_timeout = 0")
+                conn.commit()
+                started = time.perf_counter()
+                conn.exec_driver_sql("SELECT pg_sleep(6)")
+                conn.commit()
+            except Exception as exc:  # noqa: BLE001
+                ok(f"{ROLE} could not disable statement_timeout ({pgcode(exc) or exc})")
+                conn.rollback()
+            else:
+                warn(
+                    "role can disable its own statement_timeout "
+                    f"(pg_sleep(6) ran {time.perf_counter() - started:.1f}s after SET 0); "
+                    "the real guarantee is the Day 10 process wall-clock kill"
+                )
     finally:
         engine.dispose()
 
@@ -222,6 +292,9 @@ def main() -> int:
     check_admin(admin_url)
     print("\n-- read-only role --")
     check_readonly(ro_url)
+
+    print("\n-- timeouts --")
+    check_timeout(ro_url)
 
     print("\n-- PostGIS --")
     check_postgis(ro_url)

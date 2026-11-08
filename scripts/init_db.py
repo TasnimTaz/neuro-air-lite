@@ -1,7 +1,11 @@
 """Create the Hong Kong schema and the read-only agent role.
 
-    uv run python scripts/init_db.py            # create what is missing
-    uv run python scripts/init_db.py --reset    # drop schema public first
+    uv run python scripts/init_db.py               # create what is missing
+    uv run python scripts/init_db.py --roles-only  # skip the schema, refresh grants
+    uv run python scripts/init_db.py --reset       # DROP schema public CASCADE first
+
+`--reset` destroys every ingested row. Once Day 2 has loaded data, use
+`--roles-only` to re-apply the role password and grants without touching tables.
 
 The agent runtime only ever connects with the `neuro_ro` role. It gets SELECT on
 every table, is forced into read-only transactions by default, and has a 5 s
@@ -96,7 +100,17 @@ def apply_schema(admin_url: str, reset: bool) -> None:
 
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--reset", action="store_true", help="drop schema public CASCADE first")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument(
+        "--roles-only",
+        action="store_true",
+        help="skip the schema, only refresh the role password and grants",
+    )
+    mode.add_argument(
+        "--reset",
+        action="store_true",
+        help="drop schema public CASCADE first (destroys all ingested data)",
+    )
     args = parser.parse_args(argv)
 
     load_dotenv(ROOT / ".env", override=True)
@@ -106,12 +120,22 @@ def main(argv: list[str]) -> int:
         print("DB_URL_ADMIN and DB_URL_RO must be set in .env", file=sys.stderr)
         return 2
 
-    try:
-        apply_schema(admin_url, args.reset)
-    except Exception as exc:  # noqa: BLE001
-        print(f"[FAIL] schema apply failed: {exc.__class__.__name__}: {exc}", file=sys.stderr)
-        print("       if it already exists, rerun with --reset", file=sys.stderr)
-        return 1
+    if args.roles_only:
+        print("[ ok ] --roles-only: schema left untouched")
+    else:
+        try:
+            apply_schema(admin_url, args.reset)
+        except Exception as exc:  # noqa: BLE001
+            print(
+                f"[FAIL] schema apply failed: {exc.__class__.__name__}: {exc}",
+                file=sys.stderr,
+            )
+            print(
+                "       the schema already exists: use --roles-only to refresh the"
+                " role, or --reset to drop it and lose all data",
+                file=sys.stderr,
+            )
+            return 1
 
     try:
         configure_role(admin_url, ro_url)
