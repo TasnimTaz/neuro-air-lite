@@ -1,0 +1,24 @@
+services:
+  db:
+    image: postgis/postgis:16-3.4
+    container_name: neuroair-db
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: neuroair_dev_pw
+      POSTGRES_DB: airdb
+      TZ: Asia/Hong_Kong
+      PGTZ: Asia/Hong_Kong
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d airdb"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+
+volumes:
+  pgdata:
