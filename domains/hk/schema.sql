@@ -15,6 +15,8 @@
 --      to it; the creation order is fixed.
 --   5. A GIST index on osm_feature.geometry was added (the table holds the whole
 --      HK OSM extract and every spatial query would otherwise be a seq scan).
+--   6. air_quality_station.station_code was added as the natural key the monthly
+--      ingest upserts on. Without it, re-running ingest duplicates stations.
 --
 -- Everything else - names, types, columns, constraints, comments - follows the
 -- original. Timestamps are naive `timestamp` values in Hong Kong local time
@@ -110,8 +112,13 @@ CREATE TYPE building_height_control_type AS ENUM ('BHCB', 'BHCS', 'BHCN', 'NBA')
 
 -- Air quality monitoring stations: name in English, address, coordinates,
 -- altitude, station type and area type.
+--
+-- `station_code` is an addition to the upstream DDL: without a stable natural key
+-- the monthly ingest cannot upsert a station and would create duplicates on every
+-- run. It is also what station_map.py keys on.
 CREATE TABLE air_quality_station (
     id           serial PRIMARY KEY,
+    station_code varchar(20) UNIQUE,
     name_en      varchar(200),
     address_en   varchar(500),
     coordinate   geography(Point, 4326),

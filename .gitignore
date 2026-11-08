@@ -16,6 +16,7 @@ __pycache__/
 data/
 runs/
 charts/
+ingest/cache/
 *.log
 
 # --- os / editors ---
