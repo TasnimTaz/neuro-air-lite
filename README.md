@@ -40,7 +40,18 @@ uv run python scripts/check_env.py
 
 The DB and LLM lines are `[skip]` until Docker and Ollama are running; that is
 expected on a fresh machine and `--strict` will fail on them once you want a
-hard gate.
+hard gate. To prove the model can actually produce a runnable code block:
+
+```powershell
+uv run python scripts/llm_smoke.py
+```
+
+Ollama only serves 4096 tokens of context by default, which truncates the
+schema prompt on Day 4. Raise it once per machine and restart `ollama serve`:
+
+```powershell
+[Environment]::SetEnvironmentVariable('OLLAMA_CONTEXT_LENGTH','16384','User')
+```
 
 ## Layout
 
