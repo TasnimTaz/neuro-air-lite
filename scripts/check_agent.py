@@ -46,7 +46,7 @@ from sqlalchemy.exc import OperationalError  # noqa: E402
 from core.agent import run_worker  # noqa: E402
 from core.env import admin_url, load_agent_env  # noqa: E402
 from core.llm import USAGE, llm, reset_usage  # noqa: E402
-from core.prompts import get_system_prompt  # noqa: E402
+from domains.hk.schema_prompt import get_system_prompt  # noqa: E402
 from domains.hk.db import make_admin_engine  # noqa: E402
 from domains.hk.tools import build_runtime  # noqa: E402
 

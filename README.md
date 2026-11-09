@@ -216,9 +216,11 @@ Coordinator/worker hierarchy is measured against on Day 9.
 core/llm.py       AsyncOpenAI client (Ollama by default), token/latency USAGE
 core/runtime.py   in-process exec namespace + AST security checker + close()
 core/agent.py     worker loop: one code block per turn, nudge, step budget
-core/prompts.py   curated schema, live data window, HKT timezone, NULL rules
+core/prompts.py   common instructions: role, runtime manifest, execution rules
 core/env.py       agent-side .env loader; admin DSN is returned, not exported
-domains/hk/tools.py  build_runtime(): engine + pd + np + text
+domains/hk/schema_prompt.py  curated schema, HK knowledge base, worked examples
+domains/hk/tools.py  build_runtime(): engine + pd + np + text + geocode + charts
+domains/hk/viz.py    ECharts config builder (NaN/None-safe)
 ```
 
 ### How the isolation actually works
@@ -339,6 +341,124 @@ that case (53), which is why the baseline is 9/10 rather than 8/10.
    process-wide, so concurrent requests in one process are unsafe; Day 10 moves
    execution to a subprocess with an RPC boundary.
 
+## Schema prompt, tools & baseline (Day 4)
+
+Day 4 gives the single agent what a domain analyst needs beyond SQL: a prompt
+that knows Hong Kong's units, stations, AQHI/AQO context and sources; a
+host-side geocoder; and a host-side chart builder. The acceptance gate is a
+15-question baseline plus two live tool probes.
+
+```
+domains/hk/schema_prompt.py  curated DATABASE_SCHEMA, KNOWLEDGE_BASE, EXAMPLES
+domains/hk/tools.py          geocode(): Nominatim -> Lands Department ALS fallback
+domains/hk/viz.py            EChartsConfigManager.line/bar/to_json/save_html
+evals/hk_baseline.py         15 cases, truth SQL, pinned values, ANSWER hint
+scripts/check_day4.py        probes + 15-query baseline + runs/day4_baseline.json
+```
+
+### Prompt
+
+- `core/prompts.py` now holds only the domain-neutral part: role, injected
+  variables, the SQLAlchemy bind-parameter rule, the date convention and the
+  read-only rule. `domains/hk/schema_prompt.py` appends HK rules, the knowledge
+  base, four worked examples and the curated schema.
+- The prompt is assembled by concatenation, not `str.format`; JSON braces are
+  literal. This removes the Day 3 `KeyError: '"station"'` failure mode.
+- `KNOWLEDGE_BASE` carries AQHI bands (`10+` = SERIOUS), both AQO regimes
+  (2022-01-01..2025-04-10 and from 2025-04-11), WHO 2021 guidelines, the
+  ug/m3 unit rule (CO is not multiplied by 1000), and a source URL for each.
+- `validate_schema()` still asserts the curated description against
+  `information_schema` at prompt build time; the dynamic data-window block
+  lists the real 2025 range, all 18 stations and their `station_type`.
+- Measured size: 12,267 characters, about 3,066 tokens. Ollama's loaded context
+  is confirmed at 16,384 via `/api/ps`, leaving room for the conversation.
+
+### AQHI "10+" repair
+
+EPD publishes the top band as `10+`. The first ingest parsed it as 10, so 47
+serious station-hours were labelled VERY HIGH. `ingest/aq.py` now maps `10+` to
+`aqhi = 11`; `aqhi_level = 'SERIOUS'` is the authoritative label. Re-ingesting
+the 12 monthly CSVs changed 47 rows (all April 2025), left the total at 157,536,
+and `scripts/check_data.py` asserts that `aqhi > 10` and `SERIOUS` agree. This is
+why baseline case 3 expects 47.
+
+### Geocoder
+
+`geocode(address)` runs in the host process and is injected as a variable, not
+an import. Model code can call it; `import httpx`, `requests`, `http` and
+`aiohttp` are now blocked by the AST checker.
+
+- Nominatim is primary. It is queried **without** `countrycodes=hk`: on the
+  public instance that filter returns an empty list for every Hong Kong address
+  (verified 2026-11-09). The HK bounding box (22.15-22.58 N, 113.83-114.51 E) is
+  the actual filter.
+- The Lands Department ALS (`https://www.als.gov.hk/lookup`) is the fallback.
+  It is authoritative for HK street addresses but is a fuzzy matcher: it returns
+  a candidate even for nonsense. The result therefore includes the ALS `score`
+  (`None` for Nominatim) so the caller can judge. A string that produces no
+  candidate at all (`asdfghjkl qwerty`) does raise `ValueError`; the README does
+  not claim that every impossible string raises.
+- One request per second across both providers, `lru_cache` for the process
+  lifetime, and a copy returned so callers cannot mutate the cache.
+
+### Charts
+
+`charts.line(title, x, series, y_name)` and `charts.bar(...)` append an ECharts
+`option` and return its index. `_clean` converts `NaN`, `None`, `+/-inf` and
+numpy scalars to strict JSON: non-finite values become `null`, which ECharts
+renders as a gap. `to_json()` is strict JSON; `save_html()` writes a standalone
+page for manual review. The live chart probe plots Tai Po's 30 November days and
+checks the config, not just the model's prose.
+
+### Baseline result
+
+`uv run python scripts/check_day4.py` runs the static probes, the 15 questions
+and two live probes (chart, geocode). Ground truth is recomputed from the
+database and compared with the pinned values in `evals/hk_baseline.py`.
+
+| Metric | Result |
+| --- | --- |
+| Baseline (final run) | 15/15 |
+| Baseline (first full run) | 13/15 |
+| First-attempt correct | 13/15 |
+| Mean steps | 2.1 |
+| Mean time per question | 14.3 s |
+| Tokens | 144,642 |
+| Categories | retrieval 3/3, temporal 3/3, spatial 3/3, statistics 3/3, comparison 3/3 |
+| Live probes | chart PASS, geocode PASS |
+| Gate | >= 10/15 + all probes: **pass** |
+
+The two first-run misses are kept rather than prompt-tuned away, following the
+Day 3 precedent:
+
+1. **#1 latest-day PM2.5** used `datetime >= (SELECT max(datetime) ...)` instead
+   of flooring to the date, so it selected a single hour whose Tai Po PM2.5 was
+   NULL and reported "no data" instead of retrying. The second run floored to
+   the day and passed.
+2. **#5 weekday/weekend** used PostgreSQL `extract(dow) < 5`, which treats Sunday
+   as a weekday and Friday as a weekend (`dow`: Sun=0..Sat=6), giving -0.32
+   instead of -5.64. The second run used the correct classification and passed.
+
+Both are real model failure modes the Day 5 verifier and the Day 9 comparison
+should catch, not prompt defects to hide. The rerun's 15/15 shows the task is
+solvable with the same prompt; the spread 13-15 is reported honestly.
+
+### Day 4 deviations and limits
+
+1. **Curated schema, not raw DDL.** Kept from Day 3; `validate_schema()` is the
+   guard. The rest of the plan's prompt skeleton is followed.
+2. **`geocode()` returns an extra `score`.** Needed because ALS is fuzzy; without
+   it a caller cannot distinguish a building match from a junk match.
+3. **AQHI is encoded as 11 for EPD's `10+`.** The column is an integer and the
+   enum has SERIOUS; recomputing AQHI from pollutants is explicitly forbidden
+   in the prompt.
+4. **Baseline is a Python module plus a JSON artifact**, not a notebook: the
+   values are pinned, the truth SQL is re-run, and `runs/day4_baseline.json`
+   carries per-case steps, tokens, last code and last error.
+5. **The two live probes are not part of the 15.** They check tool use (did the
+   model call `geocode`, did it build a chart with 30 x-points), which is a
+   different question from numeric accuracy.
+
 ## Conventions
 
 - The agent only ever connects with the read-only `neuro_ro` role. Ingestion
@@ -374,4 +494,5 @@ that case (53), which is why the baseline is 9/10 rather than 8/10.
 | 1 | PostGIS schema, read-only role | done |
 | 2 | HK data ingestion | done |
 | 3 | LLM client, runtime, security, single agent | done |
-| 4 | schema prompt, baseline SQL agent | next |
+| 4 | schema prompt, geocoder, charts, 15-query baseline | done |
+| 5 | verifier agent | next |

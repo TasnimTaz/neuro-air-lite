@@ -256,6 +256,20 @@ def check_air_quality(conn) -> None:
     else:
         ok("aqhi_level matches aqhi on every row")
 
+    serious, ten_plus = conn.execute(
+        text(
+            "SELECT count(*) FILTER (WHERE aqhi_level = 'SERIOUS'), "
+            "count(*) FILTER (WHERE aqhi > 10) "
+            "FROM hourly_station_air_quality"
+        )
+    ).one()
+    if serious != ten_plus:
+        fail(f"{ten_plus} rows with aqhi > 10 but {serious} labelled SERIOUS")
+    elif serious:
+        ok(f"{serious:,} SERIOUS station-hours encoded as aqhi = 11 (EPD '10+')")
+    else:
+        warn("no SERIOUS station-hours in the data")
+
 
 def check_weather(conn) -> None:
     print("\n-- weather --")

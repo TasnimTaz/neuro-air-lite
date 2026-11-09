@@ -45,6 +45,9 @@ def test_manifest_filters_injected_and_callables():
         "import shutil",
         "import urllib.request",
         "import requests",
+        "import httpx",
+        "import aiohttp",
+        "from httpx import get",
         "open('some_file.txt', 'w')",
         "eval('1 + 1')",
         "exec('print(1)')",
@@ -189,3 +192,31 @@ def test_check_code_accepts_plain_dataframe_code():
         "print(df.describe())\n"
         "ANSWER = float(df['pm2_5'].mean())\n"
     )
+
+
+def test_check_code_accepts_injected_tools():
+    check_code(
+        "location = geocode('Tai Po, Hong Kong')\n"
+        "charts.line('t', ['a', 'b'], {'s': [1.0, 2.0]})\n"
+        "print(location['latitude'], len(charts.charts))\n"
+    )
+
+
+def test_runtime_injects_host_tools_and_hides_them_from_manifest():
+    rt = build_runtime()
+    try:
+        assert callable(rt.ns["geocode"])
+        assert hasattr(rt.ns["charts"], "line")
+
+        result = rt.execute(
+            "charts.line('t', ['a', 'b'], {'s': [1.0, float('nan')]})\n"
+            "print(len(charts.charts), charts.charts[0]['option']['series'][0]['data'])"
+        )
+        assert result.ok, result.error
+        assert "1 [1.0, None]" in result.stdout
+
+        manifest = rt.manifest()
+        assert "geocode" not in manifest
+        assert "charts" not in manifest
+    finally:
+        rt.close()

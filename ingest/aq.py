@@ -113,6 +113,20 @@ def parse_number(cell: str) -> float | None:
     return float(match.group(0)) if match else None
 
 
+def parse_aqhi(cell: str) -> int | None:
+    """Parse an AQHI cell, encoding EPD's top band '10+' as 11.
+
+    The published index runs 1-10 and '10+'; `aqhi_level` maps >10 to SERIOUS.
+    `parse_number('10+')` would silently return 10 and relabel every serious
+    hour as VERY HIGH, which is exactly what happened in the first ingest.
+    """
+    cell = (cell or "").strip()
+    if cell.startswith("10+"):
+        return 11
+    value = parse_number(cell)
+    return int(value) if value is not None else None
+
+
 def ensure_stations(raw) -> dict[str, int]:
     rows = [
         (s.code, s.name_en, s.lon, s.lat, s.station_type, s.area_type, s.altitude)
@@ -212,10 +226,9 @@ def ingest_aqhi(raw, ids: dict[str, int], start: date, end: date, refresh: bool)
             if not (start <= stamp.date() <= end):
                 continue
             for name, cell in zip(columns, cells[2:]):
-                value = parse_number(cell)
-                if value is None:
+                aqhi = parse_aqhi(cell)
+                if aqhi is None:
                     continue
-                aqhi = int(value)
                 rows.append((ids[by_csv_name[name].code], stamp, aqhi, aqhi_level(aqhi),
                              None, None, None, None, None, None))
 

@@ -1,20 +1,21 @@
 """Prompt rendering tests.
 
-`SYSTEM_PROMPT` is a `str.format` template, so every literal brace in the prompt
-must be doubled. A missing escape surfaced as `KeyError: '"station"'` at runtime
-and, without these tests, only when the first live question ran.
+The prompt is assembled by concatenation, so literal braces in JSON examples are
+not a format hazard. The Day 3 version used `str.format` and one missing escape
+surfaced as `KeyError: '"station"'` at runtime; `test_literal_braces_survive`
+keeps that failure from coming back.
 """
 
 import pytest
 from sqlalchemy.exc import OperationalError
 
-from core.prompts import SCHEMA, get_system_prompt, render_schema
+from domains.hk.schema_prompt import SCHEMA, get_system_prompt, render_schema
 
 
 def test_prompt_renders_without_engine():
     prompt = get_system_prompt()
 
-    # Literal JSON-ish examples survived .format().
+    # Literal JSON-ish examples survived assembly without brace escaping.
     assert '"station": "Tai Po"' in prompt
     assert "Bind parameters" in prompt
 
@@ -30,6 +31,42 @@ def test_prompt_renders_without_engine():
     assert "Asia/Hong_Kong" in prompt
     assert "Data coverage" not in prompt  # only injected with a live engine
     assert "DB_URL_ADMIN" not in prompt
+
+
+def test_prompt_includes_knowledge_base_and_tools():
+    prompt = get_system_prompt()
+
+    # AQHI top band and its database encoding.
+    assert "10+ SERIOUS" in prompt
+    assert "`aqhi = 11`" in prompt
+
+    # Both AQO regimes, because the 2025 window crosses 2025-04-11.
+    assert "From 2025-04-11" in prompt
+    assert "From 2022-01-01 to 2025-04-10" in prompt
+    assert "24h 37.5" in prompt
+    assert "24h 50" in prompt
+
+    # External standards carry a source.
+    assert "9789240034228" in prompt  # WHO 2021
+    assert "Historical_AQOs_Eng.pdf" in prompt
+
+    # Tool docstrings and examples.
+    assert "geocode(address)" in prompt
+    assert "charts.line(" in prompt
+    assert "geocode('The University of Hong Kong')" in prompt
+
+
+def test_literal_braces_survive_assembly():
+    prompt = get_system_prompt()
+    assert '{"station": "Tai Po"}' in prompt
+    assert "{{" not in prompt
+    assert "}}" not in prompt
+
+
+def test_prompt_size_is_bounded():
+    # ~4k tokens at four characters per token. Ollama is started with a 16k
+    # context so this leaves room for the conversation history.
+    assert len(get_system_prompt()) < 24000
 
 
 def test_schema_lists_every_exposed_table():
