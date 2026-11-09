@@ -18,8 +18,19 @@ $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
 
 function Test-DockerEngine {
-    $null = & docker version --format '{{.Server.Version}}' 2>$null
-    return $LASTEXITCODE -eq 0
+    # `docker version` writes to stderr while the engine boots. Under
+    # $ErrorActionPreference='Stop' Windows PowerShell turns that into a
+    # terminating NativeCommandError, so the probe has to run with 'Continue'
+    # and merge the streams itself.
+    $previous = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $null = & docker version --format '{{.Server.Version}}' 2>&1
+        return $LASTEXITCODE -eq 0
+    }
+    finally {
+        $ErrorActionPreference = $previous
+    }
 }
 
 if (-not (Test-DockerEngine)) {

@@ -206,10 +206,145 @@ The Tai Po fire case study checks reproduce the paper exactly:
 | Tai Po 24h post-fire NO2 Peak | 123.2 ug/m3 | 123.2 ug/m3 | 2.52x (pre: 48.90 ug/m3) | exact match |
 | Tai Po Wind (2025-11-26 20:00) | Near calm | 0.389 m/s from 207° (SW) | - | consistent with Tolo basin narrative |
 
+## Single agent (Day 3)
+
+Day 3 is one agent that turns a question into Python, runs it against the
+read-only database, and answers from the printed output. It is the baseline the
+Coordinator/worker hierarchy is measured against on Day 9.
+
+```
+core/llm.py       AsyncOpenAI client (Ollama by default), token/latency USAGE
+core/runtime.py   in-process exec namespace + AST security checker + close()
+core/agent.py     worker loop: one code block per turn, nudge, step budget
+core/prompts.py   curated schema, live data window, HKT timezone, NULL rules
+core/env.py       agent-side .env loader; admin DSN is returned, not exported
+domains/hk/tools.py  build_runtime(): engine + pd + np + text
+```
+
+### How the isolation actually works
+
+The AST checker rejects forbidden imports, calls, bare names (`__builtins__`),
+dunder attributes, attribute names that lead back to the process environment
+(`pd.io.common.os.environ` is blocked at `.os`), and write/DDL/session SQL
+anywhere in a statement (`SELECT 1; SET statement_timeout = 0`). The SQL pattern
+matches at a statement boundary and requires the object of the verb, so
+`print('Set of stations:', 3)` and `print('Update: mean PM2.5')` pass while
+`'DELETE FROM t'` and `'SET statement_timeout = 0'` do not.
+
+An AST blacklist can always be bypassed (`'DR' + 'OP TABLE x'`), so it is a guard
+rail, not the boundary. The real guarantees are:
+
+1. The agent engine is `neuro_ro`: inserts fail at 25006 (read-only transaction),
+   and at 42501 (missing GRANT) even with the default lifted. Both are asserted
+   in `tests/test_runtime.py`.
+2. The admin DSN is never exported. `core.env.load_agent_env()` copies only
+   `DB_URL_RO` and `LLM_*` from `.env` into `os.environ` and scrubs
+   `DB_URL_ADMIN`/`POSTGRES_*`; `admin_url()` hands the DSN to `truth_sql` for
+   this script only. Day 10 replaces this with a subprocess and a scrubbed env.
+
+Ingest scripts keep using `ingest.common.load_env()`, which exports everything.
+Only the agent-side entry points (`build_runtime()`, `scripts/check_agent.py`,
+`tests/`) use the restricted loader.
+
+### Prompt
+
+The schema description is curated, not introspected: introspection only reports
+enum *type* names, not labels, and loses units and provenance. Every table,
+column, enum label, unit and source (ERA5 for temperature/humidity/pressure, HKO
+for wind) is written out. `validate_schema()` compares that description with
+`information_schema` at prompt-build time and raises if a column is missing or a
+new one appeared undocumented, so the prompt cannot silently drift.
+
+The prompt also injects the real coverage window and the 18-station inventory
+(name, code, type) read from the database, uses `Asia/Hong_Kong` for "now"
+(Windows needs `tzdata`, added to the dependencies), and states the NULL rules:
+CO is NULL at 7 of 18 stations, `wind_degree`/`wind_direction` are NULL in calm
+hours, and NULL means "no measurement", never 0.
+
+### Agent loop
+
+- Exactly one executable block per turn. `python`, `py` and unlabelled fences
+  run; a ```sql block shown with the SQL is ignored instead of being executed as
+  Python.
+- One no-code nudge on turn 1; a later turn without a code block is the final
+  answer.
+- `first_attempt_ok` is keyed on the first *executed* block, so the nudge does
+  not count a correct first program as a failure.
+- Token counts are the `core.llm.USAGE` delta around the loop (zero for the
+  scripted fake LLM in tests).
+- The `engine` pool is disposed by `runtime.close()`; every script and test does
+  this in a `finally`.
+
+### Acceptance run
+
+```powershell
+uv run pytest                                   # unit + live-DB isolation tests
+uv run python scripts/check_agent.py --cross-check
+uv run python scripts/check_agent.py --question "Mean PM2.5 at Tai Po on 2025-11-25?"
+uv run python scripts/check_agent.py --cross-check --only 8 --show-trace
+```
+
+`check_agent.py` first proves the five isolation claims (admin DSN absent from
+`os.environ`, password absent, RO DSN present, pandas trick blocked, INSERT
+rejected with 42501), then runs ten questions against a ground-truth SQL query
+and compares the agent's `ANSWER` variable with the expected value. It reports
+pass rate, first-attempt rate, mean steps, mean latency and tokens.
+
+| # | Question | Truth |
+| --- | --- | --- |
+| 1 | mean PM2.5 at Tai Po on the latest available day | 21.60 ug/m3 |
+| 2 | max NO2 at Causeway Bay, Nov 2025 | 211.70 ug/m3 |
+| 3 | mean AQHI at Central, Jun 2025 | 2.45 |
+| 4 | hours PM2.5 > 50 at Yuen Long, 2025 | 163 |
+| 5 | mean wind speed at `wx_taipo`, Nov 2025 | 2.51 m/s |
+| 6 | max wind gust at `wx_tapmun`, 2025 | 42.78 m/s |
+| 7 | mean temperature at `wx_shatin`, Aug 2025 | 27.48 C |
+| 8 | `EDUCATIONAL_INSTITUTION` within 1500 m of Tai Po | 53 |
+| 9 | mean O3 at Tung Chung, Oct 2025 | 58.94 ug/m3 |
+| 10 | `ROADSIDE` station count | 3 |
+
+The plan phrases question 1 as "yesterday"; the database is historical
+(2025 only), so the case asks for the latest day that has data. Coverage is in
+the prompt, and an out-of-range window must be reported as "no data", not 0.
+
+**Baseline result** (`qwen2.5-coder:14b`, local Ollama, 62 tests green):
+
+```
+RESULT: 9/10 passed | first-attempt 9/10 | mean steps 2.1 | mean 12.0s | tokens 52,729
+```
+
+The one failure is semantic, not infrastructural: asked for mean O3 at Tung
+Chung, the model wrote `AVG(aq.pm2_5) AS mean_o3` and reported **14.37** instead
+of **58.94**. The SQL executed, the code was first-attempt correct, and the
+printed number is simply the wrong pollutant. No SQL guard or schema assertion
+can catch that; it is the failure mode the Day 5 Verifier and the Day 9
+single-vs-multi comparison exist to measure. The earlier run also failed the
+spatial question because the prompt only showed keyword-style bind parameters;
+adding the SQLAlchemy 2.0 dict form (`conn.execute(text(sql), {"k": v})`) fixed
+that case (53), which is why the baseline is 9/10 rather than 8/10.
+
+### Day 3 deviations and limits
+
+1. **Curated schema instead of introspection.** Introspection is used only as a
+   consistency check (`validate_schema`), because it loses enum labels, units
+   and provenance.
+2. **`DB_URL_ADMIN` is not in the agent process environment.** The plan's
+   snippet calls `load_dotenv()`, which exports every key; a module that already
+   holds `os` (pandas does) could then read the admin password from model code.
+3. **`pytest-asyncio` + `asyncio_mode = "auto"`.** Without the plugin the async
+   tests are silently skipped; without the mode the marker is unknown.
+4. **`tzdata` added.** `ZoneInfo("Asia/Hong_Kong")` fails on a bare Windows
+   Python.
+5. **No process-level sandbox yet.** `exec()` and `redirect_stdout` are
+   process-wide, so concurrent requests in one process are unsafe; Day 10 moves
+   execution to a subprocess with an RPC boundary.
+
 ## Conventions
 
 - The agent only ever connects with the read-only `neuro_ro` role. Ingestion
   and `truth_sql` use `DB_URL_ADMIN`.
+- Agent processes load only `DB_URL_RO` and `LLM_*` from `.env`; the admin DSN
+  is passed to `truth_sql` directly and never exported (`core/env.py`).
 - The LLM writes Python; the numbers come from the runtime. No arithmetic in
   the model's head.
 - `YYYY-MM-DD to YYYY-MM-DD` includes both dates in full (end is exclusive at
@@ -238,4 +373,5 @@ The Tai Po fire case study checks reproduce the paper exactly:
 | 0 | scaffold, deps, compose, env check | done |
 | 1 | PostGIS schema, read-only role | done |
 | 2 | HK data ingestion | done |
-| 3 | LLM client, runtime, security, single agent | next |
+| 3 | LLM client, runtime, security, single agent | done |
+| 4 | schema prompt, baseline SQL agent | next |
