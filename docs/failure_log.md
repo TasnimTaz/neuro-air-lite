@@ -1,9 +1,11 @@
-# Day 4 failure log: single-agent Hong Kong baseline
+# Day 4–5 failure log: single-agent and hierarchical multi-agent
 
 This log covers the v2 baseline defined in `evals/hk_baseline_v2.py` and run by
 `evals/run_baseline.py`. It is written from the saved JSON artifacts, not from
-memory. The prompt, questions and truth SQL were frozen before the official
-repeats; no prompt, question or truth SQL was changed after that point.
+memory. The single-agent prompt, questions and truth SQL were frozen before the
+official Day 4 repeats; no prompt, question or truth SQL was changed after that
+point. Day 5 reuses that frozen prompt for both arms and adds only the
+multi-agent role/coordinator text in `domains/hk/roles.py`.
 
 ## Frozen reference
 
@@ -359,3 +361,88 @@ though spatial questions are 100%.
   tables beyond the separate test suite.
 - **Not verified here:** a corrected text matcher, a later model, a multi-agent
   arm, or a fresh-prompt v3. All are open for Day 5/Day 9.
+
+## Day 5: hierarchical multi-agent
+
+### Protocol
+
+The multi arm uses the same 20 v2 questions, truth SQL, model, frozen domain
+prompt and strict scorer as the single arm. The coordinator produces a JSON plan
+of at most six steps; the last step is forced to `synthesis_report`. Workers get
+fresh chat histories and share one `PythonRuntime`. The fixed solver budget is
+20 steps: 11 producer, 3 synthesis reserve, 6 verifier reserve. The coordinator's
+planning call is recorded separately as one call and is not charged to the 20
+solver steps (see the all-call caveat below). The multi prompt hash is
+`141925a0538b2e039cb0d4ac78589ff0ddd3a99e3e5a27b5cd322976289c23a1`; the frozen
+domain prompt hash remains
+`ab5ef7e968ba542a367164e01fd54470672d48ec4556ac9f0ef96627b61b3048`.
+
+The multi arm writes `runs/multi/<timestamp>/run.json` and
+`multi_prompts.txt`. Every worker entry records its role, task, allocated
+budget, actual steps, tokens, first-attempt status, executions and final text;
+the case also records the plan, `plan_source`, `solver_steps`, `calls`,
+`planner_tokens` and the verifier text. A truth mismatch stops the run. The
+1-repeat artifact is the usable comparison. A 3-repeat attempt with the same
+prompt hash ended during repeat 1 at `#19`; it produced no `run.json`, so its
+score is not reported. Its log is
+`runs/multi/day5_v2_budget20_3x.log` (last write 2026-11-10T23:25 local); the
+process had already exited when checked, with no error line after `[19/20]`.
+
+### Usable 1-repeat
+
+`runs/multi/day5_v2_budget20_r1/run.json` (generated
+2026-11-10T16:15:58Z) scored **11/20 strict (55.0%)** and **13/20 semantic** in a
+manual audit. The two semantic additions are `#3` and `#16`: both returned the
+correct unavailable value with wording the strict matcher does not accept
+(`no CO data available`, `No PM2.5 reading available`), not a wrong number.
+
+| Arm | Strict | Semantic | Hold-out | Mean solver steps | Calls | Tokens |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Single v2, 20 steps, 3 repeats | 46/60 (76.7%) | 46/60 | 12/18 (66.7%) | 2.8 | 168 | 588,512 |
+| Multi v2, 1 repeat | 11/20 (55.0%) | 13/20 | 3/6 (50.0%) | 11.3 | 246 | 978,423 |
+
+The single row is 60 case-runs; the multi row is 20. This is a signal that the
+multi arm is worse, not a like-for-like repeat-count comparison. A 3-repeat
+multi run is still required for the Day 9 table.
+
+The multi run used 177 producer steps, 49 verifier steps and 20 planner
+calls (9,456 planner tokens). It added no case that the single arm failed and
+regressed on `#3`, `#4`, `#16` and `#17`. The four repeat-zero single-arm cases
+(`#14`, `#15`, `#18`, `#20`) and `#5` still failed.
+
+### Failure taxonomy
+
+1. **Synthesis refusal despite staged values.** The synthesis worker often
+   returned "cannot be answered" while the upstream workers had already staged
+   the required value. The verifier rescued several cases (`#2`, `#6`, `#7`,
+   `#9`, `#10`, `#12`, `#13`) but not all. The orchestrator passes only the
+   variable manifest to the next worker, not the previous worker's final text;
+   this is the leading Day 6 coordination target.
+2. **Verifier contract gaps at the text boundary.** `#3` and `#16` were correct
+   but failed the strict wording rule. `#4` combined a correct "not available"
+   sentence with a stale `ANSWER` from synthesis, so the numeric/unanswerable
+   branch failed. The verifier must explicitly unset `ANSWER` when the premise
+   is invalid.
+3. **Verifier entity re-resolution and stalls.** `#5`, `#15`, `#17` and `#18`
+   show failures where the verifier re-ran a broad name lookup, got multiple
+   matches, or stopped because it repeated a code block. The stall guard saved
+   budget but could not create a correct value.
+4. **The frozen weather-join ambiguity remains.** `#5`, `#14`, `#18` and `#20`
+   still use the separate AQ/weather id spaces without the `wx_` pairing. The
+   multi arm uses the same schema prompt, so the verifier inherits the same
+   ambiguity; this is not a topology bug.
+5. **Aggregation grain and recovery.** `#15` returned 30 instead of 31 (the
+   daily-mean exceedance grain); `#14`'s synthesis value was 3.51 but the
+   verifier discarded it; `#18` returned a date rather than a numeric value.
+6. **Cost.** The multi arm used roughly 4.4x the single arm's calls and 5x its
+   tokens for one repeat, while consuming 11.3 of 20 solver steps on average.
+   The coordinator's 20 calls are only 9,456 tokens, so the extra cost is
+   dominated by worker/verifier execution, not planning.
+
+### All-call caveat and acceptance
+
+The PDF's Day 5 acceptance condition is `multi >= single`; the multi run does
+not meet it. The plan says to fix this in Day 6, not to tune the benchmark.
+A 19-step solver sensitivity run (charging the planner) and a v3 prompt that
+states the weather join are still required before any Day 9 claim. The strict
+scorer was not changed; the semantic count is an audit, not an official score.

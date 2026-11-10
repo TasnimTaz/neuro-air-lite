@@ -1,7 +1,8 @@
-"""Run the single-agent baseline and write a reproducible JSON artifact.
+"""Run the single- or multi-agent baseline and write a reproducible JSON artifact.
 
     uv run python evals/run_baseline.py --validate-only
     uv run python evals/run_baseline.py --repeats 3
+    uv run python evals/run_baseline.py --arm multi --repeats 3
     uv run python evals/run_baseline.py --only 3 7 12 --repeats 1
     uv run python evals/run_baseline.py --no-holdout --repeats 1
 
@@ -10,9 +11,11 @@ as hold-out. The runner never edits the prompt. It records the sha256 of the
 assembled prompt and the model name in every JSON, so a later run can prove
 whether the reference changed.
 
-The default budget is 20 steps because the plan's Day 5/9 matched comparison is
-20 total steps for both arms. The committed Day 4 reference used 10 steps; use
-`--max-steps 10` only to reproduce that earlier artifact, not for Day 9.
+The default budget is 20 solver steps because the plan's Day 5/9 matched
+comparison is 20 total solver steps for both arms. For multi, the coordinator's
+planning call is recorded separately as orchestration overhead; worker and
+verifier steps are capped at 20. The committed Day 4 reference used 10 steps;
+use `--max-steps 10` only to reproduce that earlier artifact, not for Day 9.
 
 The answer is read from the runtime namespace's `ANSWER` variable, not scraped
 from the final text (except for text answers, where the final sentence is also
@@ -20,7 +23,8 @@ accepted). Truth is recomputed on the admin engine before scoring; a mismatch
 with the pinned value is reported and makes the run invalid rather than silently
 moving the benchmark.
 
-Artifacts: `runs/baseline/<timestamp>/run.json` and `prompt.txt` (gitignored).
+Artifacts: `runs/baseline/<timestamp>/run.json` and `prompt.txt` (gitignored);
+multi artifacts go to `runs/multi/<timestamp>/` with `multi_prompts.txt`.
 """
 
 from __future__ import annotations
@@ -48,8 +52,10 @@ from sqlalchemy.exc import OperationalError  # noqa: E402
 from core.agent import run_worker  # noqa: E402
 from core.env import admin_url, load_agent_env  # noqa: E402
 from core.llm import llm, reset_usage  # noqa: E402
+from core.orchestrator import run_pipeline  # noqa: E402
 from core.prompts import HKT  # noqa: E402
 from domains.hk.db import make_admin_engine  # noqa: E402
+from domains.hk.roles import COORDINATOR_SYSTEM, MULTI_RULES, ROLE_PROMPTS  # noqa: E402
 from domains.hk.schema_prompt import get_system_prompt  # noqa: E402
 from domains.hk.tools import build_runtime  # noqa: E402
 from evals.hk_baseline_v2 import ANSWER_HINT, CASES, Case  # noqa: E402
@@ -66,6 +72,20 @@ CANNOT_ANSWER = (
     "not available",
     "no data",
 )
+
+
+def _multi_prompts_text() -> str:
+    """Everything multi-only that is sent to the model, for reproducible hashes."""
+    return "\n\n".join(
+        [
+            "COORDINATOR:\n" + COORDINATOR_SYSTEM,
+            "SHARED RULES:\n" + MULTI_RULES,
+            *(
+                f"ROLE {role}:\n{prompt}"
+                for role, prompt in ROLE_PROMPTS.items()
+            ),
+        ]
+    )
 
 
 def _normalise_text(value: Any) -> str:
@@ -181,7 +201,16 @@ def _trace_parts(trace: list[tuple[str, object]]) -> tuple[list[str], list[str],
     return code_blocks, outputs, last_error
 
 
-async def run_case(case: Case, admin, max_steps: int, show_trace: bool) -> dict:
+async def run_case(
+    case: Case,
+    admin,
+    max_steps: int,
+    show_trace: bool,
+    *,
+    arm: str = "single",
+    verify_reserve: int = 6,
+    synth_reserve: int = 3,
+) -> dict:
     runtime = build_runtime()
     trace: list[tuple[str, object]] = []
     try:
@@ -194,14 +223,51 @@ async def run_case(case: Case, admin, max_steps: int, show_trace: bool) -> dict:
                 print("      " + str(payload).replace("\n", "\n      ")[:2000])
 
         started = time.perf_counter()
-        result = await run_worker(
-            llm=llm,
-            runtime=runtime,
-            system=system,
-            task=case.question + ANSWER_HINT,
-            max_steps=max_steps,
-            emit=emit,
-        )
+        pipeline = None
+        if arm == "multi":
+            pipeline = await run_pipeline(
+                llm=llm,
+                runtime=runtime,
+                role_prompts=ROLE_PROMPTS,
+                shared_rules=system + "\n\n" + MULTI_RULES,
+                coordinator_system=COORDINATOR_SYSTEM,
+                query=case.question,
+                task_suffix=ANSWER_HINT,
+                max_total=max_steps,
+                verify_reserve=verify_reserve,
+                synth_reserve=synth_reserve,
+                emit=emit,
+            )
+            final_text = pipeline.final_text
+            run_ok = pipeline.ok
+            steps = pipeline.solver_steps
+            executions = sum(run.executions for run in pipeline.worker_runs)
+            first_attempt_ok = next(
+                (
+                    run.first_attempt_ok
+                    for run in pipeline.worker_runs
+                    if run.executions > 0
+                ),
+                None,
+            )
+            tokens = pipeline.total_tokens
+            calls = pipeline.total_calls
+        else:
+            result = await run_worker(
+                llm=llm,
+                runtime=runtime,
+                system=system,
+                task=case.question + ANSWER_HINT,
+                max_steps=max_steps,
+                emit=emit,
+            )
+            final_text = result.final_text
+            run_ok = result.ok
+            steps = result.steps
+            executions = result.executions
+            first_attempt_ok = result.first_attempt_ok
+            tokens = result.prompt_tokens + result.completion_tokens
+            calls = result.steps
         elapsed = time.perf_counter() - started
         answer = runtime.ns.get("ANSWER")
 
@@ -220,9 +286,9 @@ async def run_case(case: Case, admin, max_steps: int, show_trace: bool) -> dict:
             pinned_ok = False
             truth_note = f"truth query failed: {type(error).__name__}: {error}"
 
-        passed, reason = _score(case, answer, result.final_text, result.ok)
+        passed, reason = _score(case, answer, final_text, run_ok)
         code_blocks, outputs, last_error = _trace_parts(trace)
-        return {
+        outcome = {
             "id": case.id,
             "category": case.category,
             "difficulty": case.difficulty,
@@ -237,17 +303,26 @@ async def run_case(case: Case, admin, max_steps: int, show_trace: bool) -> dict:
             "answer": answer,
             "pass": passed,
             "reason": reason,
-            "steps": result.steps,
-            "executions": result.executions,
-            "first_attempt_ok": result.first_attempt_ok,
+            "steps": steps,
+            "calls": calls,
+            "executions": executions,
+            "first_attempt_ok": first_attempt_ok,
             "seconds": elapsed,
-            "tokens": result.prompt_tokens + result.completion_tokens,
-            "ok": result.ok,
+            "tokens": tokens,
+            "ok": run_ok,
             "last_error": last_error[:4000],
             "code_blocks": code_blocks[-6:],
             "outputs": outputs[-12:],
-            "final_text": result.final_text,
+            "final_text": final_text,
         }
+        if pipeline is not None:
+            outcome["pipeline"] = pipeline.as_dict()
+            outcome["plan"] = pipeline.plan
+            outcome["plan_source"] = pipeline.plan_source
+            outcome["plan_error"] = pipeline.plan_error
+            outcome["worker_runs"] = [run.as_dict() for run in pipeline.worker_runs]
+            outcome["verifier_text"] = pipeline.verifier_text
+        return outcome
     finally:
         runtime.close()
 
@@ -268,6 +343,8 @@ def _summary(runs: list[dict], repeats: int, cases: tuple[Case, ...]) -> dict:
                 "rate": passed / len(items) if items else 0.0,
                 "first_attempt": sum(item["first_attempt_ok"] is True for item in items),
                 "steps": sum(item["steps"] for item in items) / max(len(items), 1),
+                "calls": sum(item.get("calls", item["steps"]) for item in items)
+                / max(len(items), 1),
                 "tokens": sum(item["tokens"] for item in items),
                 "seconds": sum(item["seconds"] for item in items),
             }
@@ -304,6 +381,9 @@ def _summary(runs: list[dict], repeats: int, cases: tuple[Case, ...]) -> dict:
             "total": len(all_items),
             "first_attempt": sum(item["first_attempt_ok"] is True for item in all_items),
             "mean_steps": sum(item["steps"] for item in all_items) / max(len(all_items), 1),
+            "mean_calls": sum(item.get("calls", item["steps"]) for item in all_items)
+            / max(len(all_items), 1),
+            "calls": sum(item.get("calls", item["steps"]) for item in all_items),
             "mean_seconds": sum(item["seconds"] for item in all_items) / max(len(all_items), 1),
             "tokens": sum(item["tokens"] for item in all_items),
         },
@@ -341,8 +421,8 @@ def _print_summary(summary: dict) -> None:
         f"(range {overall['min_pass_rate']:.1%}-{overall['max_pass_rate']:.1%} over "
         f"{summary['repeats']} repeats; {overall['passed']}/{overall['total']} case-runs) | "
         f"first-attempt {overall['first_attempt']}/{overall['total']} | "
-        f"mean {overall['mean_steps']:.1f} steps, {overall['mean_seconds']:.1f}s, "
-        f"{overall['tokens']:,} tokens"
+        f"mean {overall['mean_steps']:.1f} steps / {overall['mean_calls']:.1f} calls, "
+        f"{overall['mean_seconds']:.1f}s, {overall['tokens']:,} tokens"
     )
     print(
         "HOLDOUT: "
@@ -357,17 +437,22 @@ def _print_summary(summary: dict) -> None:
 
 
 async def main_async(args) -> int:
+    # Long runs are launched with their output redirected to a log file. Line
+    # buffering makes that log useful while the run is still in progress.
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(line_buffering=True)
+        except AttributeError:  # pragma: no cover - older/embedded streams
+            pass
+
     # Read the admin DSN before scrubbing, then keep it in this local variable.
     dsn = admin_url()
     load_agent_env(override=False, scrub=True)
     if args.model:
         os.environ["LLM_MODEL"] = args.model
 
-    if args.arm != "single":
-        print(
-            f"--arm {args.arm!r} is not implemented yet; Day 9 will add the multi-agent arm",
-            file=sys.stderr,
-        )
+    if args.arm not in {"single", "multi"}:
+        print(f"--arm must be 'single' or 'multi', got {args.arm!r}", file=sys.stderr)
         return 2
     if "DB_URL_ADMIN" in os.environ:
         print("[FAIL] DB_URL_ADMIN is exported; the agent environment is not scrubbed", file=sys.stderr)
@@ -410,11 +495,19 @@ async def main_async(args) -> int:
 
         preview = get_system_prompt(engine=admin, now=PROMPT_TIME)
         prompt_sha256 = hashlib.sha256(preview.encode("utf-8")).hexdigest()
+        multi_prompts = _multi_prompts_text()
+        multi_prompts_sha256 = hashlib.sha256(multi_prompts.encode("utf-8")).hexdigest()
         print(
             f"model: {os.environ.get('LLM_MODEL', '?')} at {os.environ.get('LLM_BASE_URL', '?')}\n"
             f"prompt: {len(preview):,} chars (~{len(preview) // 4:,} tokens), "
             f"sha256={prompt_sha256}"
         )
+        if args.arm == "multi":
+            print(
+                f"multi prompts: {len(multi_prompts):,} chars, sha256={multi_prompts_sha256}\n"
+                f"budget: {args.max_steps} solver steps + 1 planner call | "
+                f"verify reserve={args.verify_reserve}, synth reserve={args.synth_reserve}"
+            )
         print(f"repeats: {args.repeats} | max steps: {args.max_steps} | cases: {len(selected)}")
 
         runs: list[dict] = []
@@ -425,7 +518,15 @@ async def main_async(args) -> int:
                 print(f"\n[{index}/{len(selected)}] #{case.id} {case.question}")
                 reset_usage()
                 try:
-                    outcome = await run_case(case, admin, args.max_steps, args.show_trace)
+                    outcome = await run_case(
+                        case,
+                        admin,
+                        args.max_steps,
+                        args.show_trace,
+                        arm=args.arm,
+                        verify_reserve=args.verify_reserve,
+                        synth_reserve=args.synth_reserve,
+                    )
                 except OperationalError as error:
                     print(f"      database error: {error.orig}", file=sys.stderr)
                     return 1
@@ -439,8 +540,9 @@ async def main_async(args) -> int:
                 print(
                     f"      {'PASS' if outcome['pass'] else 'FAIL'}  "
                     f"expected={outcome['expected']!r} answer={outcome['answer']!r}  "
-                    f"steps={outcome['steps']} first={first} {outcome['seconds']:.1f}s "
-                    f"tokens={outcome['tokens']:,}  ({outcome['reason']})"
+                    f"steps={outcome['steps']} calls={outcome['calls']} first={first} "
+                    f"{outcome['seconds']:.1f}s tokens={outcome['tokens']:,}  "
+                    f"({outcome['reason']})"
                 )
                 if outcome["note"]:
                     print(f"      note: {outcome['note']}")
@@ -465,9 +567,12 @@ async def main_async(args) -> int:
     _print_summary(summary)
 
     stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    out_dir = Path(args.out) if args.out else ROOT / "runs" / "baseline" / stamp
+    arm_dir = "baseline" if args.arm == "single" else "multi"
+    out_dir = Path(args.out) if args.out else ROOT / "runs" / arm_dir / stamp
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "prompt.txt").write_text(preview, encoding="utf-8")
+    if args.arm == "multi":
+        (out_dir / "multi_prompts.txt").write_text(multi_prompts, encoding="utf-8")
     payload = {
         "generated_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         "arm": args.arm,
@@ -476,6 +581,10 @@ async def main_async(args) -> int:
         "seed_label": args.seed_label,
         "prompt_chars": len(preview),
         "prompt_sha256": prompt_sha256,
+        "multi_prompts_sha256": multi_prompts_sha256,
+        "planner_policy": "planner_call_separate_from_20_solver_steps",
+        "verify_reserve": args.verify_reserve,
+        "synth_reserve": args.synth_reserve,
         "prompt_time": PROMPT_TIME.isoformat(),
         "repeats": args.repeats,
         "max_steps": args.max_steps,
@@ -488,19 +597,33 @@ async def main_async(args) -> int:
     artifact.write_text(json.dumps(payload, indent=2, ensure_ascii=False, default=str), encoding="utf-8")
     print(f"\nARTIFACT: {artifact}")
     print(f"PROMPT:   {out_dir / 'prompt.txt'}")
+    if args.arm == "multi":
+        print(f"MULTI:    {out_dir / 'multi_prompts.txt'}")
     return 0
 
 
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--arm", default="single", help="single (multi is Day 9)")
+    parser.add_argument("--arm", choices=("single", "multi"), default="single")
     parser.add_argument("--model", default=None, help="override LLM_MODEL for this run")
     parser.add_argument("--repeats", type=int, default=3, help="number of repeats (default 3)")
     parser.add_argument(
         "--max-steps",
         type=int,
         default=20,
-        help="per-run step budget (default 20; Day 5/9 matched comparison; use 10 only for the Day 4 reference)",
+        help="per-run solver-step budget (default 20; Day 5/9 matched comparison; use 10 only for the Day 4 reference)",
+    )
+    parser.add_argument(
+        "--verify-reserve",
+        type=int,
+        default=6,
+        help="multi verifier reserve within the solver budget (default 6)",
+    )
+    parser.add_argument(
+        "--synth-reserve",
+        type=int,
+        default=3,
+        help="multi synthesis reserve within the plan budget (default 3)",
     )
     parser.add_argument("--only", type=int, nargs="*", help="subset of case ids")
     parser.add_argument("--no-holdout", action="store_true", help="skip the six hold-out cases")

@@ -28,6 +28,7 @@ import re
 import pytest
 
 from core.prompts import HKT
+from domains.hk.roles import COORDINATOR_SYSTEM, MULTI_RULES, ROLE_PROMPTS
 from domains.hk.schema_prompt import get_system_prompt
 from evals import hk_baseline, hk_baseline_v2
 
@@ -66,7 +67,14 @@ def prompt_shingles() -> set[str]:
     finally:
         if engine is not None:
             engine.dispose()
-    return _shingles(prompt)
+    multi = "\n\n".join(
+        [
+            COORDINATOR_SYSTEM,
+            MULTI_RULES,
+            *ROLE_PROMPTS.values(),
+        ]
+    )
+    return _shingles(prompt + "\n\n" + multi)
 
 
 @pytest.mark.parametrize("case", hk_baseline.CASES, ids=lambda c: f"v1-{c.id}")

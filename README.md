@@ -514,14 +514,16 @@ Run it with:
 ```powershell
 uv run python evals/run_baseline.py --validate-only
 uv run python evals/run_baseline.py --repeats 3
+uv run python evals/run_baseline.py --arm multi --repeats 3
 ```
 
 The runner records the model, the prompt sha256, the pinned and recomputed truth
 values, per-case steps/tokens/seconds, first-attempt status, code blocks and
 outputs in `runs/baseline/<timestamp>/run.json`, plus the exact prompt in
-`prompt.txt`. A truth mismatch stops the run instead of silently moving the
-benchmark. `--arm single` is the only arm until Day 9; `--no-holdout` is for
-prompt work and must not be used for the frozen reference.
+`prompt.txt`. The multi arm writes to `runs/multi/<timestamp>/` and also records
+`multi_prompts.txt`, the plan and every worker's step/token ledger. A truth
+mismatch stops the run instead of silently moving the benchmark. `--no-holdout`
+is for prompt work and must not be used for the frozen reference.
 
 #### Frozen v2 results (strict scorer)
 
@@ -618,6 +620,94 @@ scorer was not changed after the freeze. In the 20-step run `#3` and `#16` pass
    example; if the prompt changes, both single and multi arms must be rerun at
    the same 20-step budget before any Day 9 comparison.
 
+## Hierarchical multi-agent (Day 5)
+
+`core/orchestrator.py` implements the plan's coordinator → workers → verifier
+pipeline. The coordinator sees only the question and returns a JSON array of at
+most six steps; `synthesis_report` is forced to the end and a malformed planner
+response falls back to the conservative four-role checklist. Every worker gets a
+fresh chat history and the **same shared `PythonRuntime`**, so variables staged by
+one worker are visible to the next. The roles live in `domains/hk/roles.py`.
+
+The two arms use the same frozen v2 prompt, cases, model and strict scorer. The
+multi arm adds role paragraphs and shared-runtime rules, but no v2 question,
+truth value or `wx_` worked example; the prompt-leakage test covers those strings
+too. The run command is:
+
+```powershell
+uv run python evals/run_baseline.py --arm multi --repeats 3
+```
+
+### Budget ledger
+
+The 20-step solver budget is split as follows:
+
+| Part | Steps | Meaning |
+| --- | ---: | --- |
+| Producer pool | 11 | data acquisition, retrieval, analysis and meteo workers |
+| Synthesis reserve | 3 | the final `synthesis_report` step |
+| Verifier reserve | 6 | independent raw-database audit |
+
+The coordinator's planning call is **orchestration overhead**: it is recorded as
+`planner_calls`, `planner_tokens` and in `total_calls`, but it is not charged
+against the 20 solver steps. This preserves the plan's 11-step producer pool; a
+later all-call sensitivity check can use a 19-step solver cap. The runner records
+both `steps` (solver) and `calls` (planner + solver), so the distinction is visible
+in every artifact.
+
+A runtime stall guard stops a worker that tries to execute the identical code
+block twice. It does not supply SQL or an answer; it only prevents one role from
+consuming the whole producer pool in a retry loop. The verifier still gets its
+reserve and can overwrite `ANSWER` only after a fresh recomputation.
+
+### Day 5 result (1 repeat; 3-repeat interrupted)
+
+The usable full multi run uses the same 20 cases and frozen prompt and finished
+at 2026-11-10T16:15:58Z. It scored **11/20 strict (55.0%)**, with a manual
+semantic audit of 13/20: `#3` and `#16` gave the correct “no … available” answer
+but the strict text rule did not accept their wording. A 3-repeat attempt was
+started with the same prompt hash but the background process ended during
+repeat 1 at case `#19`; no `run.json` was produced, so that attempt is not used
+and no 3-repeat multi score is claimed.
+
+| Arm | Budget | Strict | Semantic | Repeats | Hold-out | Mean steps | Calls | Tokens |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Single v2 (Day 4) | 20 | 46/60 (76.7%) | 46/60 | 15/16/15 | 12/18 (66.7%) | 2.8 | 168 | 588,512 |
+| Multi v2 | 20 + planner | 11/20 (55.0%) | 13/20 | 11/20 | 3/6 (50.0%) | 11.3 | 246 | 978,423 |
+
+The single row is 60 case-runs and the multi row is 20; this is not a
+like-for-like repeat-count comparison, only a signal that the multi arm did not
+improve. The multi run used 177 producer steps, 49 verifier steps and 20 planner calls
+(9,456 planner tokens). It added no case that the single arm failed, and
+regressed on `#3`, `#4`, `#16` and `#17`; `#5`, `#14`, `#15`, `#18` and `#20`
+failed in both arms. In particular, `#4` left a stale `ANSWER` after the verifier
+said “not available”, and `#14` had a correct synthesis value (3.51) that the
+verifier discarded. The weather-join failures were unchanged.
+
+### Day 5 deviations and limits
+
+1. **20 v2 cases, not the PDF's literal 15.** The frozen v2 set has four cases in
+   each of five categories and includes the Day 4 hold-outs; using it keeps the
+   single/multi comparison on the same questions. The PDF's “15 queries” is a
+   minimum, not a different benchmark.
+2. **The planner call is separate from the 20 solver steps.** This is recorded
+   in every artifact as `planner_calls` and `total_calls`; it preserves the
+   plan's 11-step producer pool. An all-call 19-step sensitivity run is still
+   required before any claim that includes orchestration overhead.
+3. **The role prompts were smoke-tested before the full multi run.** Two
+   non-hold-out smoke cases (`#1`, `#5`) exposed a stalled worker and an
+   over-eager knowledge worker; the generic stop/read-the-error and
+   measured-value rules in `domains/hk/roles.py` were added before the full
+   1-repeat run. The v2 questions and truth SQL were not changed, and the multi
+   prompt hash is recorded in the artifact.
+4. **A strict score is primary.** A manual semantic audit is reported separately
+   because the strict text rule rejects some correct “no … available” answers.
+   Changing that rule after seeing results would move the benchmark.
+5. **The weather-join ambiguity is still present.** The multi arm uses the same
+   frozen schema prompt as the single arm, so it cannot repair the missing
+   `weather_station.station_code = 'wx_' || air_quality_station.station_code`
+   rule. A v3 prompt is a Day 6 change and requires rerunning both arms.
+
 ## Conventions
 
 - The agent only ever connects with the read-only `neuro_ro` role. Ingestion
@@ -664,4 +754,5 @@ scorer was not changed after the freeze. In the 20-step run `#3` and `#16` pass
 | 2 | HK data ingestion | done |
 | 3 | LLM client, runtime, security, single agent | done |
 | 4 | schema prompt, geocoder, charts, frozen v2 baseline | done |
-| 5 | coordinator, workers, verifier | next |
+| 5 | coordinator, workers, verifier | implemented; multi 11/20 vs single 15/20 per repeat — Day 6 fix |
+| 6 | relevance gate, knowledge retrieval, verifier tuning | next |
