@@ -523,31 +523,35 @@ outputs in `runs/baseline/<timestamp>/run.json`, plus the exact prompt in
 benchmark. `--arm single` is the only arm until Day 9; `--no-holdout` is for
 prompt work and must not be used for the frozen reference.
 
-#### Frozen v2 result (strict scorer)
+#### Frozen v2 results (strict scorer)
 
-Artifact: `runs/baseline/20261110_191651/run.json` (local, gitignored).
-Model: `qwen2.5-coder:14b`; prompt sha256
-`ab5ef7e968ba542a367164e01fd54470672d48ec4556ac9f0ef96627b61b3048`;
-three repeats, **max 10 steps**. This is the Day 4 reference, not the Day 9
-matched-budget baseline: the plan requires **20 total steps for both the single
-and multi arms**. The runner now defaults to 20; rerun v2 at 20 before Day 9, or
-compare both arms at 10. Do not compare this 10-step table with a 20-step
-multi-agent arm.
+Both artifacts use the same frozen prompt, model, questions and truth SQL:
+
+| Artifact | Max steps | Strict | Semantic | Repeats | Hold-out | Tokens |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| **20-step matched budget** | **20** | **46/60 (76.7%)** | **46/60** | **15/16/15** | **12/18 (66.7%)** | **588,512** |
+| 10-step preliminary | 10 | 44/60 (73.3%) | 46/60 | 16/15/13 | 11/18 (61.1%) | 631,106 |
+
+The **20-step** run is the single-arm matched-budget reference for Day 9:
+`runs/baseline/day4_v2_budget20/run.json` (generated
+2026-11-10T14:41:21Z), model `qwen2.5-coder:14b`, prompt sha256
+`ab5ef7e968ba542a367164e01fd54470672d48ec4556ac9f0ef96627b61b3048`,
+three repeats. Truth validation passed 20/20 before the run.
 
 | Repeat | Passed | Hold-out | Non-hold-out | First attempt | Mean steps | Tokens | Wall-clock |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 1 | 16/20 | 4/6 | 12/14 | 18/20 | 3.15 | 266,960 | 455.2s |
-| 2 | 15/20 | 4/6 | 11/14 | 18/20 | 2.65 | 184,983 | 252.6s |
-| 3 | 13/20 | 3/6 | 10/14 | 20/20 | 2.60 | 179,163 | 213.2s |
-| **Mean** | **73.3%** | **61.1%** | **78.6%** | **56/60** | **2.80** | **631,106** | **15.4s/case** |
+| 1 | 15/20 | 4/6 | 11/14 | 20/20 | 2.75 | 189,771 | 239.3s |
+| 2 | 16/20 | 4/6 | 12/14 | 18/20 | 2.85 | 203,110 | 272.8s |
+| 3 | 15/20 | 4/6 | 11/14 | 19/20 | 2.80 | 195,631 | 243.2s |
+| **Mean** | **76.7%** | **66.7%** | **81.0%** | **57/60** | **2.80** | **588,512** | **12.6s/case** |
 
 | # | Category | Difficulty | Hold-out | Pass / 3 |
 | ---: | --- | --- | :---: | ---: |
 | 1 | retrieval | simple | no | 3/3 |
 | 2 | retrieval | simple | yes | 3/3 |
-| 3 | retrieval | medium | no | 2/3 |
+| 3 | retrieval | medium | no | 3/3 |
 | 4 | retrieval | simple | no | 3/3 |
-| 5 | temporal | medium | no | 2/3 |
+| 5 | temporal | medium | no | 1/3 |
 | 6 | temporal | medium | yes | 3/3 |
 | 7 | temporal | medium | no | 3/3 |
 | 8 | temporal | simple | no | 3/3 |
@@ -558,26 +562,25 @@ multi-agent arm.
 | 13 | statistics | medium | no | 3/3 |
 | 14 | statistics | hard | yes | 0/3 |
 | 15 | statistics | medium | no | 0/3 |
-| 16 | statistics | medium | no | 2/3 |
-| 17 | multi_table | hard | yes | 2/3 |
+| 16 | statistics | medium | no | 3/3 |
+| 17 | multi_table | hard | yes | 3/3 |
 | 18 | multi_table | hard | no | 0/3 |
 | 19 | multi_table | hard | no | 3/3 |
 | 20 | multi_table | hard | yes | 0/3 |
 
-By category: retrieval 91.7%, temporal 91.7%, spatial 100.0%, statistics
-41.7%, multi_table 41.7%. By difficulty: simple 100.0%, medium 80.0%, hard
-44.4%. The four repeat-zero cases are `#14`, `#15`, `#18`, `#20`; all are
-multi-table or statistics questions that need the paired weather station.
+By category: retrieval 100.0%, temporal 83.3%, spatial 100.0%, statistics
+50.0%, multi_table 50.0%. By difficulty: simple 100.0%, medium 83.3%, hard
+50.0%. The four repeat-zero cases are still `#14`, `#15`, `#18`, `#20`; `#5`
+now passes only once. The 20-step budget did **not** remove the prompt-level
+weather-join failure, and `#18`/`#20` still fail for distinct SQL reasons.
 `docs/failure_log.md` has the code-level evidence.
 
-The strict scorer's two text false negatives are worth separating from model
-errors: `#3` in repeat 2 printed "CO ... is not available" in the execution
-output but finalized as "The question cannot be answered"; `#16` in repeat 3
-printed "No PM2.5 reading available". Both are semantically correct NULL
-answers, but the frozen `UNAVAILABLE` matcher does not accept those exact
-phrases, so the artifact records 44/60. A semantic audit would count them as
-two more passes (46/60, 76.7%); I did not change the scorer after the freeze.
-The failure log records both readings.
+The 10-step artifact (`runs/baseline/20261110_191651/run.json`) remains the
+historical Day 4 reference. Its strict score was 44/60; a semantic audit counted
+two correct NULL answers (`#3` repeat 2 and `#16` repeat 3) and gave 46/60. The
+scorer was not changed after the freeze. In the 20-step run `#3` and `#16` pass
+3/3, so its strict and semantic scores are both 46/60. Do not compare the
+10-step table with a 20-step multi-agent arm.
 
 ### Day 4 deviations and limits
 
@@ -606,6 +609,14 @@ The failure log records both readings.
    SQL changed. The official hash is `ab5ef7e...`; the pre-freeze diagnostics
    are kept under `runs/pre_freeze_prompt_bug/` and are not part of the reported
    table. Details and evidence are in `docs/failure_log.md`.
+8. **The frozen v2 prompt still has a weather-join ambiguity.** The domain rule
+   says “join hourly tables on `station_id`” while the pairing rule only states
+   that weather codes are `'wx_<air quality station_code>'`; no worked example
+   joins the two hourly tables. This is deliberately left unchanged so the
+   baseline measures the defect. It is not evidence that a larger model would
+   fix it. A v3/Day 6 prompt must state the join explicitly and add a `wx_`
+   example; if the prompt changes, both single and multi arms must be rerun at
+   the same 20-step budget before any Day 9 comparison.
 
 ## Conventions
 

@@ -2,8 +2,8 @@
 
 This log covers the v2 baseline defined in `evals/hk_baseline_v2.py` and run by
 `evals/run_baseline.py`. It is written from the saved JSON artifacts, not from
-memory. The prompt was frozen before the official three repeats; no prompt,
-question or truth SQL was changed after that point.
+memory. The prompt, questions and truth SQL were frozen before the official
+repeats; no prompt, question or truth SQL was changed after that point.
 
 ## Frozen reference
 
@@ -15,12 +15,17 @@ question or truth SQL was changed after that point.
 | Prompt sha256 | `ab5ef7e968ba542a367164e01fd54470672d48ec4556ac9f0ef96627b61b3048` |
 | Cases | 20 (four per category; six hold-outs) |
 | Repeats | 3 |
-| Max steps | 10 (Day 4 reference; the Day 5/9 matched budget is 20) |
 | Truth validation | 20/20 pinned values match the database |
-| Official artifact | `runs/baseline/20261110_191651/run.json` (generated 2026-11-10T13:16:51Z) |
+| **20-step artifact (matched budget)** | `runs/baseline/day4_v2_budget20/run.json` (generated 2026-11-10T14:41:21Z) |
+| 10-step artifact (historical Day 4 reference) | `runs/baseline/20261110_191651/run.json` (generated 2026-11-10T13:16:51Z) |
 
 The official run used the unmodified v2 questions and truth SQL. The six
 hold-outs are `#2, #6, #11, #14, #17, #20`.
+
+The plan requires **20 total steps** for both the single and multi arms. The
+20-step artifact is therefore the single-arm matched-budget reference for Day 9.
+The 10-step artifact is retained as the historical Day 4 reference; it must not
+be compared with a 20-step multi-agent arm.
 
 ## Pre-freeze diagnostics (not the official table)
 
@@ -71,25 +76,30 @@ general map data, not the authoritative institution inventory.
 The diagnostic runs remain on disk under `runs/pre_freeze_prompt_bug/` for
 audit, but they are **not** part of the official table.
 
-## Official results
+## Results
 
-The frozen artifact records **44/60 case-runs (73.3%)**, range **65.0%-80.0%**
-over the three repeats. The strict scorer is deliberately left unchanged.
+### 20-step matched-budget reference
+
+The 20-step run records **46/60 case-runs (76.7%)**, range **75.0%-80.0%** over
+the three repeats. It is not a clean “20 steps improved the score” result: the
+model took different paths, fixed `#3`, `#16` and `#17`, but regressed `#5` from
+2/3 to 1/3. The prompt-level weather-join defect and the genuine aggregation
+failures remain.
 
 | Repeat | Passed | Hold-out | Non-hold-out | First attempt | Mean steps | Tokens | Wall-clock |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 1 | 16/20 | 4/6 | 12/14 | 18/20 | 3.15 | 266,960 | 455.2s |
-| 2 | 15/20 | 4/6 | 11/14 | 18/20 | 2.65 | 184,983 | 252.6s |
-| 3 | 13/20 | 3/6 | 10/14 | 20/20 | 2.60 | 179,163 | 213.2s |
-| **Mean** | **73.3%** | **61.1%** | **78.6%** | **56/60** | **2.80** | **631,106** | **15.4s/case** |
+| 1 | 15/20 | 4/6 | 11/14 | 20/20 | 2.75 | 189,771 | 239.3s |
+| 2 | 16/20 | 4/6 | 12/14 | 18/20 | 2.85 | 203,110 | 272.8s |
+| 3 | 15/20 | 4/6 | 11/14 | 19/20 | 2.80 | 195,631 | 243.2s |
+| **Mean** | **76.7%** | **66.7%** | **81.0%** | **57/60** | **2.80** | **588,512** | **12.6s/case** |
 
 | # | Category | Difficulty | Hold-out | Pass / 3 |
 | ---: | --- | --- | :---: | ---: |
 | 1 | retrieval | simple | no | 3/3 |
 | 2 | retrieval | simple | yes | 3/3 |
-| 3 | retrieval | medium | no | 2/3 |
+| 3 | retrieval | medium | no | 3/3 |
 | 4 | retrieval | simple | no | 3/3 |
-| 5 | temporal | medium | no | 2/3 |
+| 5 | temporal | medium | no | 1/3 |
 | 6 | temporal | medium | yes | 3/3 |
 | 7 | temporal | medium | no | 3/3 |
 | 8 | temporal | simple | no | 3/3 |
@@ -100,53 +110,70 @@ over the three repeats. The strict scorer is deliberately left unchanged.
 | 13 | statistics | medium | no | 3/3 |
 | 14 | statistics | hard | yes | 0/3 |
 | 15 | statistics | medium | no | 0/3 |
-| 16 | statistics | medium | no | 2/3 |
-| 17 | multi_table | hard | yes | 2/3 |
+| 16 | statistics | medium | no | 3/3 |
+| 17 | multi_table | hard | yes | 3/3 |
 | 18 | multi_table | hard | no | 0/3 |
 | 19 | multi_table | hard | no | 3/3 |
 | 20 | multi_table | hard | yes | 0/3 |
 
-By category: retrieval 91.7%, temporal 91.7%, spatial 100.0%, statistics
-41.7%, multi_table 41.7%. By difficulty: simple 100.0%, medium 80.0%, hard
-44.4%.
+By category: retrieval 100.0%, temporal 83.3%, spatial 100.0%, statistics
+50.0%, multi_table 50.0%. By difficulty: simple 100.0%, medium 83.3%, hard
+50.0%.
 
-### Scorer note: two correct NULL answers counted as failures
+### 10-step preliminary artifact
+
+The earlier 10-step artifact is kept for audit:
+
+| Repeat | Passed | Hold-out | Non-hold-out | First attempt | Mean steps | Tokens | Wall-clock |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 16/20 | 4/6 | 12/14 | 18/20 | 3.15 | 266,960 | 455.2s |
+| 2 | 15/20 | 4/6 | 11/14 | 18/20 | 2.65 | 184,983 | 252.6s |
+| 3 | 13/20 | 3/6 | 10/14 | 20/20 | 2.60 | 179,163 | 213.2s |
+| **Mean** | **73.3%** | **61.1%** | **78.6%** | **56/60** | **2.80** | **631,106** | **15.4s/case** |
+
+The strict score was **44/60 (73.3%)**. A semantic audit counted two correct
+NULL answers as passes (`#3` repeat 2 and `#16` repeat 3), giving 46/60 (76.7%).
+The strict artifact was not rewritten after the audit, and the scorer was not
+changed after the freeze. In the 20-step run both cases pass 3/3, so its strict
+and semantic scores are both 46/60.
+
+The 10-step per-case results were: #1 3/3, #2 3/3, #3 2/3, #4 3/3, #5 2/3,
+#6 3/3, #7 3/3, #8 3/3, #9 3/3, #10 3/3, #11 3/3, #12 3/3, #13 3/3,
+#14 0/3, #15 0/3, #16 2/3, #17 2/3, #18 0/3, #19 3/3, #20 0/3.
+
+### Scorer note: two correct NULL answers in the 10-step run
 
 The frozen `UNAVAILABLE` matcher accepts `not available`, `no data`,
 `unavailable`, `missing` and `null`, but not every paraphrase:
 
 * `#3`, repeat 2: the SQL returned NULL and the execution output said
   `CO concentration data is not available for Sha Tin in 2025.` The final text
-  was `The question cannot be answered from the data.` (`ANSWER` unset). The
-  strict matcher counts this as a miss.
+  was `The question cannot be answered from the data.` (`ANSWER` unset).
 * `#16`, repeat 3: the row exists and `pm2_5` is NULL; the final text was
-  `No PM2.5 reading available for Tai Po at noon on 7 January 2025.` The strict
-  matcher counts this as a miss.
+  `No PM2.5 reading available for Tai Po at noon on 7 January 2025.`
 
-Both answers are semantically correct. A semantic audit would add these two
-passes: **46/60 (76.7%)**, with per-repeat 16/16/14 and range 70.0%-80.0%.
-The artifact remains at the strict 44/60 because changing the scorer after the
-freeze would silently move the reference. The matcher should be fixed before
-the next baseline or both scores should be reported explicitly.
+Both answers are semantically correct. The 10-step strict score remains 44/60;
+the semantic audit is **46/60 (76.7%)**. The 20-step run does not contain these
+false negatives, so its 46/60 needs no semantic adjustment.
 
 ## Failure taxonomy
 
-### 1. Paired-weather join key (repeat-zero: #14, #18, #20; one miss: #5)
+### 1. Prompt ambiguity and paired-weather join key
 
-This is the dominant failure family. `hourly_station_air_quality.station_id`
-points at `air_quality_station.id`, while `hourly_station_weather.station_id`
-points at `weather_station.id`. The id spaces are different. The prompt's rule
-is to pair them through `weather_station.station_code = 'wx_' || aq.station_code`,
-but the model repeatedly joins the two hourly tables on `station_id` directly:
+`hourly_station_air_quality.station_id` points at `air_quality_station.id`,
+while `hourly_station_weather.station_id` points at `weather_station.id`. The id
+spaces are different. The correct pairing is:
 
 ```sql
--- repeat 1, #14
+JOIN air_quality_station s ON s.id = a.station_id
+JOIN weather_station ws
+  ON ws.station_code = 'wx_' || s.station_code
 JOIN hourly_station_weather w
-  ON a.station_id = w.station_id AND a.datetime = w.datetime
+  ON w.station_id = ws.id AND w.datetime = a.datetime
 ```
 
-**The prompt is part of the cause.** Its domain rule says "join hourly tables
-on `station_id`" (line 30), then separately says the weather code is
+The prompt is part of the cause. Its domain rule says “join hourly tables on
+`station_id`” (line 30), then separately says the weather code is
 `'wx_<air quality station_code>'` (line 41) without a join example. The direct
 join is a reasonable reading of line 30; this is a prompt ambiguity, not merely
 a 14B capacity limit. The frozen v2 prompt was not changed, so the baseline
@@ -154,93 +181,130 @@ keeps measuring this defect. A v3/Day 6 prompt must make the rule explicit:
 each hourly table joins its own station table on `station_id`; the two hourly
 tables are paired through the station codes, never by `station_id`.
 
-The join is empty, so `#14` finishes with "No data available for Causeway Bay
-in 2025." The same mistake appears in `#18` (repeat 2) and `#20` (repeat 3);
-`#5` (repeat 3) uses the AQ id when querying `hourly_station_weather`, so the
-August/January weather rows disappear and the model reports "data ... is not
-available." `#5` passes in repeats 1-2 because those attempts use the
-`wx_` pairing.
+In the 20-step run, all three `#14` attempts use the direct join and return “No
+data available for Causeway Bay in 2025”:
 
-The prompt fix is necessary but not sufficient: `#18` repeat 1 did use the
-`wx_` code and still failed on `datetime IN :datetimes` (bind expansion) and the
-10-step budget; `#20` repeat 2 paired the station correctly but filtered all
-stations by a shared timestamp set, producing 30.31 instead of 31.18. Those are
-recovery and aggregation failures on top of the join ambiguity.
+```sql
+-- #14, all repeated code
+JOIN hourly_station_weather w
+  ON a.station_id = w.station_id AND a.datetime = w.datetime
+```
 
-`#20` also shows two distinct aggregation mistakes:
+The same direct join appears in `#18` repeat 2 and `#20` repeat 3. The prompt
+fix is necessary but not sufficient: the other repeats fail for independent
+reasons documented below.
 
-* repeat 2 uses a set of timestamps where *any* station had wind below 2 m/s,
-  then averages roadside and general NO2 over that timestamp set. The truth
-  filters each station-hour by **that station's paired weather row**; the
-  result is 30.31 instead of 31.18.
-* repeat 3 joins the AQ id to the weather id (empty), while repeat 1 uses
-  non-existent aliases (`ws.station_id`, `a.station_id`) and ends with
-  "The question cannot be answered".
+`#5` is a different entity-resolution failure in the 20-step run. Repeat 1 uses
+`lower(replace(name_en, ' ', '')) LIKE :station_name` but binds
+`%Shatin%` with a capital `S`, so the lowercase comparison finds nothing.
+Repeat 3 queries `weather_station.name_en LIKE '%Shatin%'` and misses
+`Sha Tin` because of the space. Repeat 2 passes because it uses the lowercase
+literal `%shatin%` and `wx_shatin`. The prompt rule is correct; the model did not
+apply it consistently.
 
-### 2. Aggregation grain: daily mean vs hourly exceedance (#15, 0/3)
+### 2. Top-five NULL ordering at Tai Po (#18, 0/3)
+
+`#18` asks for the average wind speed during the five hours with the highest
+PM2.5 at Tai Po. The truth orders with `NULLS LAST`:
+
+```sql
+ORDER BY a.pm2_5 DESC NULLS LAST
+LIMIT 5
+```
+
+Two 20-step attempts (`r1`, `r3`) use a correct `wx_taipo` weather join but omit
+`NULLS LAST`:
+
+```sql
+-- #18 r1
+ORDER BY pm2_5 DESC
+LIMIT 5
+```
+
+PostgreSQL's default is `NULLS FIRST` for `DESC`, so the five selected rows
+include NULL PM2.5 hours; the mean wind at those hours is **3.71 m/s** instead
+of the truth's **4.24 m/s**. `#18` repeat 2 instead uses the direct
+`a.station_id = w.station_id` join and returns no data. This is a SQL-semantics
+failure, not an arithmetic or model-capacity problem.
+
+### 3. Roadside-minus-general aggregation (#20, 0/3)
+
+`#20` asks for average roadside NO2 minus average general NO2, filtering each
+station-hour by **that station's paired weather row** with wind below 2 m/s.
+
+* Repeat 1 builds a `filtered_hours` set from *any* weather station with wind
+  below 2, then applies that timestamp set to all AQ stations. It also writes
+  `AVG(CASE WHEN station_type = 'ROADSIDE' THEN no2 ELSE 0 END)`, which changes
+  the denominator and returns **-16.34** instead of 31.18.
+* Repeat 2 attempts the correct AQ/weather pairing but joins through
+  `hs.station_id`/`ws.station_id` aliases that do not exist in the CTE, producing
+  `UndefinedColumn` and `UndefinedTable`; it retries the same broken shape.
+* Repeat 3 joins the two hourly tables directly on `station_id`; the join is
+  empty and the final text is “The question cannot be answered from the data.”
+
+The truth uses one join keyed by both station code and datetime; the model's
+three failures cover shared-timestamp filtering, alias/recovery, and the
+prompt-level id-space confusion.
+
+### 4. Aggregation grain: daily mean vs hourly exceedance (#15, 0/3)
 
 `#15` asks for days whose **daily average** PM2.5 exceeded 30. The prompt states
-the daily-mean rule explicitly (line 44) but has no worked CTE example. Repeats
-1 and 3 count distinct dates with any individual hourly reading above 30:
+the daily-mean rule explicitly (line 44) but has no worked CTE example. All three
+20-step attempts count distinct dates with any individual hourly reading above
+30:
 
 ```sql
 SELECT COUNT(DISTINCT DATE(datetime))
 FROM hourly_station_air_quality ...
-WHERE ... AND hqaq.pm2_5 > 30
+WHERE ... AND pm2_5 > 30
 ```
 
-That returns 81 days; the truth first averages the hourly values per day and
-then counts 31 days. Repeat 2 tries
-`AVG(...) OVER (PARTITION BY DATE(datetime))` inside `WHERE`, gets
-`WindowingError: window functions are not allowed in WHERE`, and stops without
-retrying. The three failures are therefore two different bugs: wrong grain in
-two runs, and a failed self-repair in the third.
+That returns **81** days; the truth first averages the hourly values per day and
+then counts **31** days. This is a wrong-grain error, not a weather-join error.
+A corrected CTE example would make the pattern explicit, but the rule itself is
+not contradictory.
 
-### 3. Day flooring after choosing the worst day (#17, one miss in repeat 3)
+### 5. Day flooring after choosing the worst day (#17)
 
-The truth chooses the worst day by daily average, then averages wind over the
-whole calendar day. Repeat 3 chooses the worst day correctly but returns
-`MAX(datetime)` for that day and uses it as the start of a one-day weather
-window:
+The truth chooses the worst day by daily average PM2.5, then averages wind over
+the whole calendar day. In the 10-step run, repeat 3 chose the worst day
+correctly but returned `MAX(datetime)` for that day and used it as the start of
+a one-day weather window:
 
 ```sql
 SELECT MAX(datetime) AS worst_day ... ORDER BY AVG(pm2_5) DESC LIMIT 1
 -- later: hsw.datetime >= :worst_day AND hsw.datetime < :worst_day + INTERVAL '1 day'
 ```
 
-`worst_day` is 23:00, so the window covers only the last hour, producing 2.58
-m/s instead of the full-day 1.81 m/s. This is the same day-flooring failure
-seen in v1 case 1 (`max(datetime)` instead of a date floor), not a spatial or
-weather-pairing error. Repeats 1-2 pass.
+`worst_day` was 23:00, so the window covered only the last hour, producing
+2.58 m/s instead of the full-day 1.81 m/s. In the 20-step run `#17` passes 3/3;
+repeat 2 selects the day by maximum hourly PM2.5 rather than daily average, but
+the day happens to match and the tolerance accepts 1.736 against 1.81. The
+full-day pattern is therefore still a known weakness even though the case
+passes.
 
-### 4. Text/finalization mismatch on NULL answers (#3, #16; scorer limitation)
+### 6. Error recovery and step budget
 
-These are the two semantics-correct answers described in the scorer note above.
-In both cases the model's SQL and execution output are right; the final prose
-uses a paraphrase (`cannot be answered`, `No ... available`) that the frozen
-matcher does not accept. They are **not** evidence that the model misread the
-NULL data.
-
-### 5. Error recovery and step budget (#18, #20)
-
-`#18` is the most expensive failure: repeat 1 spends all 10 steps and 83,557
-tokens repeating essentially the same code, with
-`A value is required for bind parameter 'station_code'` and a failed attempt
-to expand `datetime IN :datetimes`. It never uses the `wx_taipo` join and ends
-with `[STEP_BUDGET_EXHAUSTED]`. The three repeats average 4.7 steps, 97,745
-tokens and 257.4 seconds for this case alone. This is a recovery/orchestration
-failure distinct from the arithmetic failures above.
+The 10-step `#18` failure was the most expensive: repeat 1 spent all 10 steps
+and 83,557 tokens repeating
+`A value is required for bind parameter 'station_code'` and a failed
+`datetime IN :datetimes` expansion, ending with
+`[STEP_BUDGET_EXHAUSTED]`. The 20-step run did not repeat that loop; `#18` now
+fails on the NULL-ordering and direct-join bugs instead. The 20-step budget
+therefore helped one recovery path but did **not** fix the repeat-zero cases.
+`#20` repeat 2 still spends five steps retrying invalid aliases. A verifier that
+checks table aliases and join keys remains necessary.
 
 ### Calendar semantics observed in diagnostics, not repeat-zero
 
-Pre-freeze r1 #6 used PostgreSQL `EXTRACT(DOW)` with `dow IN (0,1,2,3,4)` as
-"weekdays" (Sunday=0), returning 1.42 instead of 0.28. The official repeats all
-pass #6 (0.276, 0.28, 0.283), so this is variance/one bad SQL formulation, not
-a stable failure. It is still a known semantic trap for Day 5's verifier.
+Pre-freeze r1 `#6` used PostgreSQL `EXTRACT(DOW)` with `dow IN (0,1,2,3,4)` as
+“weekdays” (Sunday=0), returning 1.42 instead of 0.28. The official repeats all
+pass `#6`, so this is variance/one bad SQL formulation, not a stable failure.
+It is still a known semantic trap for Day 5's verifier.
 
 ## Hold-out failures
 
-Hold-out score: **11/18 (61.1%)**. The six hold-outs are:
+20-step hold-out score: **12/18 (66.7%)**. The six hold-outs are:
 
 | Case | Question theme | Pass / 3 | Failure |
 | ---: | --- | ---: | --- |
@@ -248,46 +312,50 @@ Hold-out score: **11/18 (61.1%)**. The six hold-outs are:
 | 6 | Tung Chung weekend/weekday PM2.5 | 3/3 | diagnostic r1 only |
 | 11 | closest station to Victoria Park | 3/3 | none |
 | 14 | Causeway Bay NO2-wind correlation | 0/3 | paired-weather join key |
-| 17 | Tai Po worst-day wind | 2/3 | day flooring in r3 |
+| 17 | Tai Po worst-day wind | 3/3 | 10-step r3 day flooring; 20-step passes |
 | 20 | roadside minus general NO2, low wind | 0/3 | paired-weather join/aggregation |
 
 The hold-out failures are concentrated in the same multi-table weather joins
 as the non-hold-out failures; there is no evidence that the prompt was tuned
-to the hold-outs. Two of the six hold-outs (#14 and #20) are repeat-zero, so
-the hold-out rate is lower than the overall rate even though spatial questions
-are 100%.
+to the hold-outs. Two of the six hold-outs (`#14` and `#20`) are repeat-zero in
+both budgets, so the hold-out rate remains lower than the overall rate even
+though spatial questions are 100%.
 
 ## What this does and does not show
 
 - **This is a single-agent reference, not a multi-agent result.** No claim of a
   multi-agent gain can be made from 44/60 or 46/60. The Day 9 arm must run the
-  same frozen v2 set and the same scorer; otherwise the comparison is invalid.
-- **The strict score is 44/60.** The two scorer false negatives are documented
-  above; the semantic audit is 46/60 (76.7%). The frozen artifact was not
-  rewritten after the audit.
-- **The two prompt fixes were pre-freeze.** They were derived from non-hold-out
-  cases #5, #9, #10 and #19, not from the six hold-outs. No v2 question or truth
-  SQL changed. The prompt hash is recorded in every artifact.
-- **The main remaining weakness is the paired-weather join.** Three of the four
-  repeat-zero cases (#14, #18, #20) plus one #5 miss involve the separate AQ and
-  weather id spaces. A verifier that checks the join key, or a prompt example
-  that demonstrates `wx_<station_code>`, is the obvious Day 5 target.
-- **Day-grain and aggregation errors remain.** `#15` and `#17` show that
-  "daily average" and "worst day" still need an explicit day-flooring/CTE
-  pattern; this is not a model-capacity ceiling.
-- **The step budget is not the Day 9 matched budget.** The plan specifies 20
-  total steps for both the single and multi arms. This Day 4 artifact used 10,
-  so it is a valid Day 4 reference but **not** a fair Day 9 comparison baseline.
-  `evals/run_baseline.py` now defaults to 20; rerun v2 at 20 before Day 9 (or run
-  both arms at 10). The 10-step table must not be compared with a 20-step
-  multi-agent arm.
-- **Cost is concentrated.** `#18` alone consumed 97,745 tokens across three
-  repeats and 257.4 seconds per attempt, including one 10-step budget exhaustion.
-  A step-budget/cost table should accompany any later multi-agent comparison.
+  same frozen v2 set, the same prompt and the same scorer; otherwise the
+  comparison is invalid.
+- **The 20-step artifact is the matched-budget single-arm reference.** It uses
+  the same frozen prompt and questions, passes 20/20 truth validation, and is the
+  correct starting point for a 20-step multi-agent arm. The 10-step artifact is
+  historical and must not be compared with a 20-step multi arm.
+- **The 20-step score is 46/60 strict and 46/60 semantic.** The 10-step score is
+  44/60 strict and 46/60 semantic. The raw +2 in the 20-step strict score is not
+  a clean budget effect: `#3`, `#16` and `#17` pass, but `#5` regresses from 2/3
+  to 1/3, and the path randomness is visible in the per-repeat results.
+- **The prompt ambiguity remains the dominant failure family.** Three of the four
+  repeat-zero cases (`#14`, `#18`, `#20`) plus one `#5` miss involve the separate
+  AQ and weather id spaces or entity resolution. A verifier that checks the join
+  key, or a prompt example that demonstrates `wx_<station_code>`, is the obvious
+  Day 5/Day 6 target.
+- **The prompt fix alone will not remove every failure.** `#18` also needs
+  `NULLS LAST`; `#20` needs paired-row aggregation rather than a shared timestamp
+  set and correct aliases; `#15` needs a daily-mean CTE. These are separate
+  SQL-semantics and recovery failures.
+- **Day-grain and aggregation errors remain.** `#15` and `#20` show that “daily
+  average”, “five highest” and “roadside minus general” still need explicit
+  grain/CTE patterns; this is not a single model-capacity ceiling.
+- **Cost is concentrated but lower at 20 steps in this sample.** The 20-step run
+  used 588,512 tokens across 60 case-runs (12.6s/case), versus 631,106
+  (15.4s/case) at 10 steps. `#18` alone used 28,220 tokens across three repeats;
+  `#20` used 44,518. A step-budget/cost table should accompany any later
+  multi-agent comparison.
 - **Environment and scope.** Results are from one local model
   (`qwen2.5-coder:14b`, Ollama, temperature 0.2), three repeats, one machine.
   The host suspended once during an earlier 3-repeat attempt; that attempt is
-  not used. No clean-checkout or Docker-only reproduction was run for this
-  table beyond the separate test suite.
+  not used. No clean-checkout or Docker-only reproduction was run for these
+  tables beyond the separate test suite.
 - **Not verified here:** a corrected text matcher, a later model, a multi-agent
   arm, or a fresh-prompt v3. All are open for Day 5/Day 9.
