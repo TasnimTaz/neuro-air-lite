@@ -145,12 +145,27 @@ JOIN hourly_station_weather w
   ON a.station_id = w.station_id AND a.datetime = w.datetime
 ```
 
+**The prompt is part of the cause.** Its domain rule says "join hourly tables
+on `station_id`" (line 30), then separately says the weather code is
+`'wx_<air quality station_code>'` (line 41) without a join example. The direct
+join is a reasonable reading of line 30; this is a prompt ambiguity, not merely
+a 14B capacity limit. The frozen v2 prompt was not changed, so the baseline
+keeps measuring this defect. A v3/Day 6 prompt must make the rule explicit:
+each hourly table joins its own station table on `station_id`; the two hourly
+tables are paired through the station codes, never by `station_id`.
+
 The join is empty, so `#14` finishes with "No data available for Causeway Bay
 in 2025." The same mistake appears in `#18` (repeat 2) and `#20` (repeat 3);
 `#5` (repeat 3) uses the AQ id when querying `hourly_station_weather`, so the
 August/January weather rows disappear and the model reports "data ... is not
 available." `#5` passes in repeats 1-2 because those attempts use the
 `wx_` pairing.
+
+The prompt fix is necessary but not sufficient: `#18` repeat 1 did use the
+`wx_` code and still failed on `datetime IN :datetimes` (bind expansion) and the
+10-step budget; `#20` repeat 2 paired the station correctly but filtered all
+stations by a shared timestamp set, producing 30.31 instead of 31.18. Those are
+recovery and aggregation failures on top of the join ambiguity.
 
 `#20` also shows two distinct aggregation mistakes:
 
@@ -164,8 +179,9 @@ available." `#5` passes in repeats 1-2 because those attempts use the
 
 ### 2. Aggregation grain: daily mean vs hourly exceedance (#15, 0/3)
 
-`#15` asks for days whose **daily average** PM2.5 exceeded 30. Repeats 1 and 3
-count distinct dates with any individual hourly reading above 30:
+`#15` asks for days whose **daily average** PM2.5 exceeded 30. The prompt states
+the daily-mean rule explicitly (line 44) but has no worked CTE example. Repeats
+1 and 3 count distinct dates with any individual hourly reading above 30:
 
 ```sql
 SELECT COUNT(DISTINCT DATE(datetime))
