@@ -15,7 +15,7 @@ question or truth SQL was changed after that point.
 | Prompt sha256 | `ab5ef7e968ba542a367164e01fd54470672d48ec4556ac9f0ef96627b61b3048` |
 | Cases | 20 (four per category; six hold-outs) |
 | Repeats | 3 |
-| Max steps | 10 |
+| Max steps | 10 (Day 4 reference; the Day 5/9 matched budget is 20) |
 | Truth validation | 20/20 pinned values match the database |
 | Official artifact | `runs/baseline/20261110_191651/run.json` (generated 2026-11-10T13:16:51Z) |
 
@@ -259,6 +259,12 @@ are 100%.
 - **Day-grain and aggregation errors remain.** `#15` and `#17` show that
   "daily average" and "worst day" still need an explicit day-flooring/CTE
   pattern; this is not a model-capacity ceiling.
+- **The step budget is not the Day 9 matched budget.** The plan specifies 20
+  total steps for both the single and multi arms. This Day 4 artifact used 10,
+  so it is a valid Day 4 reference but **not** a fair Day 9 comparison baseline.
+  `evals/run_baseline.py` now defaults to 20; rerun v2 at 20 before Day 9 (or run
+  both arms at 10). The 10-step table must not be compared with a 20-step
+  multi-agent arm.
 - **Cost is concentrated.** `#18` alone consumed 97,745 tokens across three
   repeats and 257.4 seconds per attempt, including one 10-step budget exhaustion.
   A step-budget/cost table should accompany any later multi-agent comparison.

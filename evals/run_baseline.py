@@ -10,6 +10,10 @@ as hold-out. The runner never edits the prompt. It records the sha256 of the
 assembled prompt and the model name in every JSON, so a later run can prove
 whether the reference changed.
 
+The default budget is 20 steps because the plan's Day 5/9 matched comparison is
+20 total steps for both arms. The committed Day 4 reference used 10 steps; use
+`--max-steps 10` only to reproduce that earlier artifact, not for Day 9.
+
 The answer is read from the runtime namespace's `ANSWER` variable, not scraped
 from the final text (except for text answers, where the final sentence is also
 accepted). Truth is recomputed on the admin engine before scoring; a mismatch
@@ -492,7 +496,12 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--arm", default="single", help="single (multi is Day 9)")
     parser.add_argument("--model", default=None, help="override LLM_MODEL for this run")
     parser.add_argument("--repeats", type=int, default=3, help="number of repeats (default 3)")
-    parser.add_argument("--max-steps", type=int, default=10)
+    parser.add_argument(
+        "--max-steps",
+        type=int,
+        default=20,
+        help="per-run step budget (default 20; Day 5/9 matched comparison; use 10 only for the Day 4 reference)",
+    )
     parser.add_argument("--only", type=int, nargs="*", help="subset of case ids")
     parser.add_argument("--no-holdout", action="store_true", help="skip the six hold-out cases")
     parser.add_argument("--seed-label", default=None, help="free-form label stored in the JSON")

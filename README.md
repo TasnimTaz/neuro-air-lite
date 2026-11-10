@@ -528,7 +528,11 @@ prompt work and must not be used for the frozen reference.
 Artifact: `runs/baseline/20261110_191651/run.json` (local, gitignored).
 Model: `qwen2.5-coder:14b`; prompt sha256
 `ab5ef7e968ba542a367164e01fd54470672d48ec4556ac9f0ef96627b61b3048`;
-three repeats, max 10 steps.
+three repeats, **max 10 steps**. This is the Day 4 reference, not the Day 9
+matched-budget baseline: the plan requires **20 total steps for both the single
+and multi arms**. The runner now defaults to 20; rerun v2 at 20 before Day 9, or
+compare both arms at 10. Do not compare this 10-step table with a 20-step
+multi-agent arm.
 
 | Repeat | Passed | Hold-out | Non-hold-out | First attempt | Mean steps | Tokens | Wall-clock |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
