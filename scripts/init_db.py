@@ -25,6 +25,11 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.sql.expression import literal
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from core.env import load_admin_env  # noqa: E402
+
 SCHEMA_FILE = ROOT / "domains" / "hk" / "schema.sql"
 
 ROLE = "neuro_ro"
@@ -114,10 +119,18 @@ def main(argv: list[str]) -> int:
     args = parser.parse_args(argv)
 
     load_dotenv(ROOT / ".env", override=True)
+    try:
+        load_admin_env(override=True)
+    except RuntimeError as error:
+        print(f"[FAIL] {error}", file=sys.stderr)
+        return 2
     admin_url = os.environ.get("DB_URL_ADMIN")
     ro_url = os.environ.get("DB_URL_RO")
     if not admin_url or not ro_url:
-        print("DB_URL_ADMIN and DB_URL_RO must be set in .env", file=sys.stderr)
+        print(
+            "DB_URL_ADMIN must be in the admin-only file and DB_URL_RO in .env",
+            file=sys.stderr,
+        )
         return 2
 
     if args.roles_only:

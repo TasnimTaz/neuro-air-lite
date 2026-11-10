@@ -22,14 +22,23 @@ folder as `Neuro-Air 10-Day Implementation Plan (A to Z).pdf`.
 
 ```powershell
 uv sync
-Copy-Item .env.example .env    # already present in a fresh checkout of this machine
+Copy-Item .env.example .env
+# Admin credentials live OUTSIDE the repository:
+New-Item -ItemType Directory -Force "$HOME\.neuro-air"
+Copy-Item admin.env.example "$HOME\.neuro-air\admin.env"
+# edit ~/.neuro-air/admin.env: POSTGRES_USER, POSTGRES_PASSWORD, POSTGRES_DB, DB_URL_ADMIN
 ```
+
+The repo `.env` is model-readable, so it must contain only `DB_URL_RO` and the
+`LLM_*` settings. The admin DSN and `POSTGRES_*` live in
+`~/.neuro-air/admin.env`; set `NEURO_ADMIN_ENV` to use a different path. Do not
+copy the admin values back into `.env`.
 
 Start the database:
 
 ```powershell
 .\scripts\dev_up.ps1           # starts Docker Desktop if needed, waits for healthy
-docker compose ps
+docker compose --env-file "$HOME\.neuro-air\admin.env" ps
 ```
 
 Docker Desktop does not reliably start with Windows, so `dev_up.ps1` checks the
@@ -64,7 +73,7 @@ core/                 llm client, python runtime, orchestrator, prompts, gate
 domains/hk/           schema, schema prompt, tools, charts, knowledge base
 ingest/               one idempotent script per data source
 api/                  FastAPI app, SSE stream, monitoring daemon, static UI
-eval/                 PV benchmark tasks, validators, analyze
+evals/                baseline cases, leakage guard, reproducible runner
 tests/                pytest
 scripts/              environment check and one-off utilities
 ```
@@ -86,16 +95,31 @@ only need the role and grants reapplied.
 `init_db.py` also creates the `neuro_ro` role from the credentials in
 `DB_URL_RO`, grants it `SELECT` on everything, forces
 `default_transaction_read_only=on` and sets a 5 s `statement_timeout`. Ingestion
-and `truth_sql` use `DB_URL_ADMIN`; the agent never sees that URL. `domains/hk/db.py`
-is the only sanctioned way to build either engine (`make_ro_engine()` and
-`make_admin_engine()`); the read-only profile pins `pool_size=5`,
-`max_overflow=10`, `pool_pre_ping=True`, `connect_timeout=5` and passes
-`statement_timeout` as a startup option so a changed role default cannot lift it.
+and `truth_sql` use `DB_URL_ADMIN`; the agent never receives that URL.
+`domains/hk/db.py` is the only sanctioned way to build either engine
+(`make_ro_engine()` and `make_admin_engine()`); the read-only profile pins
+`pool_size=5`, `max_overflow=10`, `pool_pre_ping=True`, `connect_timeout=5` and
+passes `statement_timeout` as a startup option so a changed role default cannot
+lift it.
 
-The Postgres superuser password comes from `POSTGRES_PASSWORD` in `.env`
-(`docker compose` reads that file automatically). It only applies when the
-`pgdata` volume is first created; changing it later needs `ALTER USER` or
-`docker compose down -v`.
+The admin DSN and `POSTGRES_*` live outside the repository, in
+`~/.neuro-air/admin.env` by default (`NEURO_ADMIN_ENV` overrides the path).
+`scripts/init_db.py`, `scripts/check_db.py` and `ingest.common.load_env()` read
+that file; the repo `.env` holds only `DB_URL_RO` and the LLM settings. This
+blocks accidental and ordinary API-level reads of `.env` (pandas and numpy can
+read a file even when the AST checker blocks `open`). A deliberate absolute-path
+read of `~/.neuro-air/admin.env` from model code is still possible until the Day
+10 subprocess runs with a scrubbed environment; the claim is limited to that.
+
+The Postgres superuser password comes from `POSTGRES_PASSWORD` in the admin file.
+`dev_up.ps1` passes `--env-file` automatically; if you run compose by hand:
+
+```powershell
+docker compose --env-file "$HOME\.neuro-air\admin.env" up -d
+```
+
+The password only applies when the `pgdata` volume is first created; changing it
+later needs `ALTER USER` or `docker compose down -v`.
 
 14 tables, all following the reference implementation: `air_quality_station`,
 `hourly_station_air_quality`, `street`, `road_segment`,
@@ -209,8 +233,9 @@ The Tai Po fire case study checks reproduce the paper exactly:
 ## Single agent (Day 3)
 
 Day 3 is one agent that turns a question into Python, runs it against the
-read-only database, and answers from the printed output. It is the baseline the
-Coordinator/worker hierarchy is measured against on Day 9.
+read-only database, and answers from the printed output. It is the Day 3
+capability baseline; the Day 9 reference is the frozen 20-case v2 set in
+`evals/`, not the 9/10 smoke run below.
 
 ```
 core/llm.py       AsyncOpenAI client (Ollama by default), token/latency USAGE
@@ -239,14 +264,19 @@ rail, not the boundary. The real guarantees are:
 1. The agent engine is `neuro_ro`: inserts fail at 25006 (read-only transaction),
    and at 42501 (missing GRANT) even with the default lifted. Both are asserted
    in `tests/test_runtime.py`.
-2. The admin DSN is never exported. `core.env.load_agent_env()` copies only
-   `DB_URL_RO` and `LLM_*` from `.env` into `os.environ` and scrubs
-   `DB_URL_ADMIN`/`POSTGRES_*`; `admin_url()` hands the DSN to `truth_sql` for
-   this script only. Day 10 replaces this with a subprocess and a scrubbed env.
+2. The admin DSN is not in the repo `.env` and is never exported to the agent.
+   `core.env.load_agent_env()` copies only `DB_URL_RO` and `LLM_*` from `.env`
+   into `os.environ` and scrubs `DB_URL_ADMIN`/`POSTGRES_*` if the parent shell
+   exported them. `admin_url()` reads the admin-only file outside the repo and
+   returns the DSN to the caller without exporting it. This stops accidental and
+   API-level `.env` reads; a deliberate absolute-path read of
+   `~/.neuro-air/admin.env` is still possible until the Day 10 subprocess.
 
-Ingest scripts keep using `ingest.common.load_env()`, which exports everything.
-Only the agent-side entry points (`build_runtime()`, `scripts/check_agent.py`,
-`tests/`) use the restricted loader.
+Ingest and schema scripts use `ingest.common.load_env()`, which loads the repo
+`.env` and then the admin-only file; `scripts/check_db.py` and
+`scripts/init_db.py` use `core.env.load_admin_env()` explicitly. Agent-side entry
+points (`build_runtime()`, `scripts/check_agent.py`, `tests/`) use the restricted
+loader.
 
 ### Prompt
 
@@ -258,10 +288,11 @@ for wind) is written out. `validate_schema()` compares that description with
 new one appeared undocumented, so the prompt cannot silently drift.
 
 The prompt also injects the real coverage window and the 18-station inventory
-(name, code, type) read from the database, uses `Asia/Hong_Kong` for "now"
+(name and code) read from the database, uses `Asia/Hong_Kong` for "now"
 (Windows needs `tzdata`, added to the dependencies), and states the NULL rules:
 CO is NULL at 7 of 18 stations, `wind_degree`/`wind_direction` are NULL in calm
-hours, and NULL means "no measurement", never 0.
+hours, and NULL means "no measurement", never 0. Station type is in the schema;
+the model queries it when a question needs roadside/general filtering.
 
 ### Agent loop
 
@@ -309,7 +340,7 @@ The plan phrases question 1 as "yesterday"; the database is historical
 (2025 only), so the case asks for the latest day that has data. Coverage is in
 the prompt, and an out-of-range window must be reported as "no data", not 0.
 
-**Baseline result** (`qwen2.5-coder:14b`, local Ollama, 62 tests green):
+**Baseline result** (`qwen2.5-coder:14b`, local Ollama, 62 tests green at the time):
 
 ```
 RESULT: 9/10 passed | first-attempt 9/10 | mean steps 2.1 | mean 12.0s | tokens 52,729
@@ -330,9 +361,11 @@ that case (53), which is why the baseline is 9/10 rather than 8/10.
 1. **Curated schema instead of introspection.** Introspection is used only as a
    consistency check (`validate_schema`), because it loses enum labels, units
    and provenance.
-2. **`DB_URL_ADMIN` is not in the agent process environment.** The plan's
-   snippet calls `load_dotenv()`, which exports every key; a module that already
-   holds `os` (pandas does) could then read the admin password from model code.
+2. **The admin DSN is outside the repository.** The plan's snippet calls
+   `load_dotenv()`, which exports every key; a module that already holds `os`
+   (pandas does) could then read the admin password from model code. The repo
+   `.env` now holds only `DB_URL_RO` and the LLM settings; the admin values live
+   in `~/.neuro-air/admin.env` (or `NEURO_ADMIN_ENV`).
 3. **`pytest-asyncio` + `asyncio_mode = "auto"`.** Without the plugin the async
    tests are silently skipped; without the mode the marker is unknown.
 4. **`tzdata` added.** `ZoneInfo("Asia/Hong_Kong")` fails on a bare Windows
@@ -345,33 +378,51 @@ that case (53), which is why the baseline is 9/10 rather than 8/10.
 
 Day 4 gives the single agent what a domain analyst needs beyond SQL: a prompt
 that knows Hong Kong's units, stations, AQHI/AQO context and sources; a
-host-side geocoder; and a host-side chart builder. The acceptance gate is a
-15-question baseline plus two live tool probes.
+host-side geocoder; and a host-side chart builder. The implementation gate is
+the static + live tool probes and the v1 smoke run. The **reported reference
+baseline is v2**, a separate 20-question set; v1 stays in the repo as a
+contaminated smoke test and is not used for the Day 9 comparison.
 
 ```
-domains/hk/schema_prompt.py  curated DATABASE_SCHEMA, KNOWLEDGE_BASE, EXAMPLES
-domains/hk/tools.py          geocode(): Nominatim -> Lands Department ALS fallback
-domains/hk/viz.py            EChartsConfigManager.line/bar/to_json/save_html
-evals/hk_baseline.py         15 cases, truth SQL, pinned values, ANSWER hint
-scripts/check_day4.py        probes + 15-query baseline + runs/day4_baseline.json
+domains/hk/schema_prompt.py    curated schema, KNOWLEDGE_BASE, three examples
+domains/hk/tools.py            geocode(): Nominatim -> Lands Department ALS fallback
+domains/hk/viz.py              EChartsConfigManager.line/bar/to_json/save_html
+evals/hk_baseline.py           smoke set v1 (contaminated; not the baseline)
+evals/hk_baseline_v2.py        frozen 20-case reference, six hold-outs
+evals/run_baseline.py          prompt sha256 + model + repeats -> runs/baseline/*.json
+scripts/check_day4.py          tool probes + v1 smoke run + runs/day4_baseline.json
+tests/test_prompt_leakage.py   12-token leakage guard over v1 and v2
 ```
 
 ### Prompt
 
-- `core/prompts.py` now holds only the domain-neutral part: role, injected
-  variables, the SQLAlchemy bind-parameter rule, the date convention and the
-  read-only rule. `domains/hk/schema_prompt.py` appends HK rules, the knowledge
-  base, four worked examples and the curated schema.
+- `core/prompts.py` holds the domain-neutral part: role, injected variables, the
+  SQLAlchemy bind-parameter rule, the date convention and the read-only rule.
+  `domains/hk/schema_prompt.py` appends HK rules, the knowledge base, three
+  worked examples and the curated schema.
 - The prompt is assembled by concatenation, not `str.format`; JSON braces are
   literal. This removes the Day 3 `KeyError: '"station"'` failure mode.
 - `KNOWLEDGE_BASE` carries AQHI bands (`10+` = SERIOUS), both AQO regimes
   (2022-01-01..2025-04-10 and from 2025-04-11), WHO 2021 guidelines, the
   ug/m3 unit rule (CO is not multiplied by 1000), and a source URL for each.
 - `validate_schema()` still asserts the curated description against
-  `information_schema` at prompt build time; the dynamic data-window block
-  lists the real 2025 range, all 18 stations and their `station_type`.
-- Measured size: 12,267 characters, about 3,066 tokens. Ollama's loaded context
-  is confirmed at 16,384 via `/api/ps`, leaving room for the conversation.
+  `information_schema` at prompt build time; the dynamic data-window block lists
+  the real 2025 range and all 18 stations by name and code.
+- Measured size with the live data window: **9,990 characters, about 2,497
+  tokens**, sha256 `ab5ef7e968ba542a367164e01fd54470672d48ec4556ac9f0ef96627b61b3048`
+  (9,243 characters without it). The three examples use a chart on
+  `osm_feature`, a geocode + bind-parameter nearest-weather query, and a
+  `sensitive_area` school radius at Sham Shui Po (800 m); none reproduces a v2
+  question or truth SQL, and none uses a v2 station/radius/date/threshold
+  combination.
+- Entity resolution, NULL, empty-result and invalid-premise rules are explicit:
+  fuzzy names are spacing-normalized and must print the single match (or stop on
+  0/>1), a missing measurement is "not available" (not 0), and a nonexistent
+  station or an out-of-coverage date must be reported as unanswerable.
+- Institution counts use `sensitive_area`, the authoritative school/hospital/
+  worship inventory; `osm_feature` is described as general map data. This is
+  deliberate: the two sources have different coverage, and the v2 truth uses
+  `sensitive_area`.
 
 ### AQHI "10+" repair
 
@@ -380,7 +431,7 @@ serious station-hours were labelled VERY HIGH. `ingest/aq.py` now maps `10+` to
 `aqhi = 11`; `aqhi_level = 'SERIOUS'` is the authoritative label. Re-ingesting
 the 12 monthly CSVs changed 47 rows (all April 2025), left the total at 157,536,
 and `scripts/check_data.py` asserts that `aqhi > 10` and `SERIOUS` agree. This is
-why baseline case 3 expects 47.
+why v1 smoke case 3 expects 47.
 
 ### Geocoder
 
@@ -410,61 +461,156 @@ renders as a gap. `to_json()` is strict JSON; `save_html()` writes a standalone
 page for manual review. The live chart probe plots Tai Po's 30 November days and
 checks the config, not just the model's prose.
 
-### Baseline result
+### Baseline v1 is a contaminated smoke set
 
-`uv run python scripts/check_day4.py` runs the static probes, the 15 questions
-and two live probes (chart, geocode). Ground truth is recomputed from the
-database and compared with the pinned values in `evals/hk_baseline.py`.
+The former `15/15` headline is withdrawn. Three of v1's worked examples were
+the same questions and SQL as three v1 cases:
 
-| Metric | Result |
-| --- | --- |
-| Baseline (final run) | 15/15 |
-| Baseline (first full run) | 13/15 |
-| First-attempt correct | 13/15 |
-| Mean steps | 2.1 |
-| Mean time per question | 14.3 s |
-| Tokens | 144,642 |
-| Categories | retrieval 3/3, temporal 3/3, spatial 3/3, statistics 3/3, comparison 3/3 |
-| Live probes | chart PASS, geocode PASS |
-| Gate | >= 10/15 + all probes: **pass** |
+| v1 case | Contaminated example | What was duplicated |
+| --- | --- | --- |
+| 7 | old example 2 | geocode HKU -> nearest air-quality station |
+| 8 | old example 3 | places of worship within 2 km of Yuen Long |
+| 12 | old example 4 | days with Yuen Long daily PM2.5 above the current AQO |
 
-The two first-run misses are kept rather than prompt-tuned away, following the
-Day 3 precedent:
+`evals/hk_baseline.py` stays in the repo as **smoke set v1**, and
+`scripts/check_day4.py` still runs it, but it is not the Day 9 baseline. Its
+first full run was 13/15 and a rerun with the same prompt was 15/15:
 
-1. **#1 latest-day PM2.5** used `datetime >= (SELECT max(datetime) ...)` instead
-   of flooring to the date, so it selected a single hour whose Tai Po PM2.5 was
-   NULL and reported "no data" instead of retrying. The second run floored to
-   the day and passed.
-2. **#5 weekday/weekend** used PostgreSQL `extract(dow) < 5`, which treats Sunday
-   as a weekday and Friday as a weekend (`dow`: Sun=0..Sat=6), giving -0.32
-   instead of -5.64. The second run used the correct classification and passed.
+| v1 run | Passed | Note |
+| --- | --- | --- |
+| first full run | 13/15 | #1 used `max(datetime)` instead of the day floor; #5 used `extract(dow) < 5` |
+| rerun, temperature 0.2 | 15/15 | variance, not evidence of a clean ceiling |
 
-Both are real model failure modes the Day 5 verifier and the Day 9 comparison
-should catch, not prompt defects to hide. The rerun's 15/15 shows the task is
-solvable with the same prompt; the spread 13-15 is reported honestly.
+Those two misses are real failure modes (latest-day flooring, Sunday=0 in
+PostgreSQL `dow`), but the 13-15/15 spread cannot be used to claim a multi-agent
+gain: v1 had a ceiling effect and prompt leakage.
+
+`tests/test_prompt_leakage.py` now guards both sets: it lower-cases the text,
+strips SQL literals, numeric literals and `wx_` station codes, and fails if any
+question or truth SQL shares a **12-token run** with the assembled prompt. It
+runs on every v1 and v2 case. The prompt examples are a chart on `osm_feature`,
+a geocode + bind-parameter nearest-weather query, and a Sham Shui Po
+`sensitive_area` school radius; none reproduces a v2 question or its SQL, and
+the leakage test checks the normalized assembly rather than trusting that claim.
+
+### Baseline v2 (Day 9 reference)
+
+`evals/hk_baseline_v2.py` freezes 20 real-user questions, four in each category
+(`retrieval`, `temporal`, `spatial`, `statistics`, `multi_table`). Design:
+
+- 17 of 20 need two or more tables or a spatial join;
+- four fuzzy entity names (`Shatin`, `tung chung`, `causeway bay`,
+  `Central/Western`) force an explicit lookup and must print the match;
+- two NULL traps: CO at Sha Tin (never measured there) and a real
+  station-hour whose PM2.5 is NULL. Answering 0 fails; "not available" passes;
+- two invalid premises: the nonexistent Kennedy Town station and January 2026
+  (outside the 2025 coverage). The only pass is a final sentence that says the
+  question cannot be answered **and** `ANSWER` unset;
+- six hold-outs (`#2, #6, #11, #14, #17, #20`) are marked and are not used to
+  tune the prompt.
+
+Run it with:
+
+```powershell
+uv run python evals/run_baseline.py --validate-only
+uv run python evals/run_baseline.py --repeats 3
+```
+
+The runner records the model, the prompt sha256, the pinned and recomputed truth
+values, per-case steps/tokens/seconds, first-attempt status, code blocks and
+outputs in `runs/baseline/<timestamp>/run.json`, plus the exact prompt in
+`prompt.txt`. A truth mismatch stops the run instead of silently moving the
+benchmark. `--arm single` is the only arm until Day 9; `--no-holdout` is for
+prompt work and must not be used for the frozen reference.
+
+#### Frozen v2 result (strict scorer)
+
+Artifact: `runs/baseline/20261110_191651/run.json` (local, gitignored).
+Model: `qwen2.5-coder:14b`; prompt sha256
+`ab5ef7e968ba542a367164e01fd54470672d48ec4556ac9f0ef96627b61b3048`;
+three repeats, max 10 steps.
+
+| Repeat | Passed | Hold-out | Non-hold-out | First attempt | Mean steps | Tokens | Wall-clock |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 16/20 | 4/6 | 12/14 | 18/20 | 3.15 | 266,960 | 455.2s |
+| 2 | 15/20 | 4/6 | 11/14 | 18/20 | 2.65 | 184,983 | 252.6s |
+| 3 | 13/20 | 3/6 | 10/14 | 20/20 | 2.60 | 179,163 | 213.2s |
+| **Mean** | **73.3%** | **61.1%** | **78.6%** | **56/60** | **2.80** | **631,106** | **15.4s/case** |
+
+| # | Category | Difficulty | Hold-out | Pass / 3 |
+| ---: | --- | --- | :---: | ---: |
+| 1 | retrieval | simple | no | 3/3 |
+| 2 | retrieval | simple | yes | 3/3 |
+| 3 | retrieval | medium | no | 2/3 |
+| 4 | retrieval | simple | no | 3/3 |
+| 5 | temporal | medium | no | 2/3 |
+| 6 | temporal | medium | yes | 3/3 |
+| 7 | temporal | medium | no | 3/3 |
+| 8 | temporal | simple | no | 3/3 |
+| 9 | spatial | medium | no | 3/3 |
+| 10 | spatial | medium | no | 3/3 |
+| 11 | spatial | hard | yes | 3/3 |
+| 12 | spatial | medium | no | 3/3 |
+| 13 | statistics | medium | no | 3/3 |
+| 14 | statistics | hard | yes | 0/3 |
+| 15 | statistics | medium | no | 0/3 |
+| 16 | statistics | medium | no | 2/3 |
+| 17 | multi_table | hard | yes | 2/3 |
+| 18 | multi_table | hard | no | 0/3 |
+| 19 | multi_table | hard | no | 3/3 |
+| 20 | multi_table | hard | yes | 0/3 |
+
+By category: retrieval 91.7%, temporal 91.7%, spatial 100.0%, statistics
+41.7%, multi_table 41.7%. By difficulty: simple 100.0%, medium 80.0%, hard
+44.4%. The four repeat-zero cases are `#14`, `#15`, `#18`, `#20`; all are
+multi-table or statistics questions that need the paired weather station.
+`docs/failure_log.md` has the code-level evidence.
+
+The strict scorer's two text false negatives are worth separating from model
+errors: `#3` in repeat 2 printed "CO ... is not available" in the execution
+output but finalized as "The question cannot be answered"; `#16` in repeat 3
+printed "No PM2.5 reading available". Both are semantically correct NULL
+answers, but the frozen `UNAVAILABLE` matcher does not accept those exact
+phrases, so the artifact records 44/60. A semantic audit would count them as
+two more passes (46/60, 76.7%); I did not change the scorer after the freeze.
+The failure log records both readings.
 
 ### Day 4 deviations and limits
 
 1. **Curated schema, not raw DDL.** Kept from Day 3; `validate_schema()` is the
-   guard. The rest of the plan's prompt skeleton is followed.
+   guard. The prompt renders one compact line per table; SQL type names are
+   omitted because the model needs units, enum labels and join keys, not
+   `..._enum` identifiers.
 2. **`geocode()` returns an extra `score`.** Needed because ALS is fuzzy; without
    it a caller cannot distinguish a building match from a junk match.
 3. **AQHI is encoded as 11 for EPD's `10+`.** The column is an integer and the
    enum has SERIOUS; recomputing AQHI from pollutants is explicitly forbidden
    in the prompt.
-4. **Baseline is a Python module plus a JSON artifact**, not a notebook: the
-   values are pinned, the truth SQL is re-run, and `runs/day4_baseline.json`
-   carries per-case steps, tokens, last code and last error.
-5. **The two live probes are not part of the 15.** They check tool use (did the
+4. **The baseline is a Python module plus a JSON artifact**, not a notebook: the
+   values are pinned, the truth SQL is re-run, and the runner records the prompt
+   hash and model so a later run can prove whether the reference changed.
+5. **The two live tool probes are not part of v2.** They check tool use (did the
    model call `geocode`, did it build a chart with 30 x-points), which is a
    different question from numeric accuracy.
+6. **v1 remains as a smoke set.** It is explicitly contaminated and its score is
+   not reported as the baseline; its only role is a quick Day 4 tool check.
+7. **Two prompt defects were fixed before the freeze, not after it.** Diagnostic
+   runs exposed (a) a fuzzy example that searched `%shatin%` although the
+   database stores `Sha Tin`, and (b) a school example that used `osm_feature`
+   while the truth uses the authoritative `sensitive_area` inventory. Both were
+   corrected generically before the official repeats; no v2 question or truth
+   SQL changed. The official hash is `ab5ef7e...`; the pre-freeze diagnostics
+   are kept under `runs/pre_freeze_prompt_bug/` and are not part of the reported
+   table. Details and evidence are in `docs/failure_log.md`.
 
 ## Conventions
 
 - The agent only ever connects with the read-only `neuro_ro` role. Ingestion
   and `truth_sql` use `DB_URL_ADMIN`.
-- Agent processes load only `DB_URL_RO` and `LLM_*` from `.env`; the admin DSN
-  is passed to `truth_sql` directly and never exported (`core/env.py`).
+- The repo `.env` holds only `DB_URL_RO` and `LLM_*`; the admin DSN and
+  `POSTGRES_*` live in `~/.neuro-air/admin.env` (override `NEURO_ADMIN_ENV`).
+  `admin_url()` returns the DSN to the caller and never exports it
+  (`core/env.py`).
 - The LLM writes Python; the numbers come from the runtime. No arithmetic in
   the model's head.
 - `YYYY-MM-DD to YYYY-MM-DD` includes both dates in full (end is exclusive at
@@ -485,6 +631,14 @@ solvable with the same prompt; the spread 13-15 is reported honestly.
   stale-`PATH` problem.
 - Ollama answers on `:11434` only after the desktop app (or `ollama serve`) is
   running; start it once per reboot if it is not set to launch at login.
+- `admin env ... not found` or `POSTGRES_PASSWORD ... set POSTGRES_PASSWORD`: the
+  admin file is missing or compose was run without it. Create
+  `~/.neuro-air/admin.env` from `admin.env.example`; `scripts/dev_up.ps1`
+  passes it automatically, and a manual compose command needs
+  `--env-file "$HOME\.neuro-air\admin.env"`.
+- `admin DSN ...` from a test means the script loaded the agent environment
+  first. Call `admin_url()` before `load_agent_env()`, as
+  `scripts/check_agent.py` and `scripts/check_db.py` do.
 
 ## Status
 
@@ -494,5 +648,5 @@ solvable with the same prompt; the spread 13-15 is reported honestly.
 | 1 | PostGIS schema, read-only role | done |
 | 2 | HK data ingestion | done |
 | 3 | LLM client, runtime, security, single agent | done |
-| 4 | schema prompt, geocoder, charts, 15-query baseline | done |
-| 5 | verifier agent | next |
+| 4 | schema prompt, geocoder, charts, frozen v2 baseline | done |
+| 5 | coordinator, workers, verifier | next |

@@ -7,7 +7,7 @@ services:
       - "5432:5432"
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in the admin env file and rerun with --env-file}"
       POSTGRES_DB: ${POSTGRES_DB:-airdb}
       TZ: Asia/Hong_Kong
       PGTZ: Asia/Hong_Kong

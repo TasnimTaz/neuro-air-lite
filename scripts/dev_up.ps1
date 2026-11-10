@@ -17,6 +17,15 @@ if (Test-Path $dockerBin) {
 $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
 
+$adminEnv = if ($env:NEURO_ADMIN_ENV) {
+    $env:NEURO_ADMIN_ENV
+} else {
+    Join-Path $HOME '.neuro-air\admin.env'
+}
+if (-not (Test-Path $adminEnv)) {
+    throw "Admin env file not found at $adminEnv. Copy admin.env.example there and fill in POSTGRES_* and DB_URL_ADMIN (never put them in the repo .env)."
+}
+
 function Test-DockerEngine {
     # `docker version` writes to stderr while the engine boots. Under
     # $ErrorActionPreference='Stop' Windows PowerShell turns that into a
@@ -52,11 +61,11 @@ if (-not (Test-DockerEngine)) {
     Write-Host 'Docker engine is up.'
 }
 
-& docker compose up -d --wait
+& docker compose --env-file $adminEnv up -d --wait
 if ($LASTEXITCODE -ne 0) {
     throw "docker compose up failed with exit code $LASTEXITCODE"
 }
 
-& docker compose ps
+& docker compose --env-file $adminEnv ps
 Write-Host ''
 Write-Host 'Database is ready. Next: uv run python scripts/check_db.py'

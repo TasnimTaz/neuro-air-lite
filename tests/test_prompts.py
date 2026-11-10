@@ -22,8 +22,8 @@ def test_prompt_renders_without_engine():
     # Enum labels and units come from the curated schema, not introspection.
     assert "'GENERAL' | 'ROADSIDE'" in prompt
     assert "ug/m3" in prompt
-    assert "ERA5 reanalysis" in prompt
-    assert "HKO 10-minute observations" in prompt
+    assert "ERA5" in prompt
+    assert "HKO 10-minute" in prompt
     assert "(Geometry, 4326)" in prompt
 
     # Rules that prevent silent wrong answers.
@@ -31,6 +31,13 @@ def test_prompt_renders_without_engine():
     assert "Asia/Hong_Kong" in prompt
     assert "Data coverage" not in prompt  # only injected with a live engine
     assert "DB_URL_ADMIN" not in prompt
+
+    # Fuzzy names must survive the canonical spelling with a space ("Sha Tin").
+    assert "lower(replace(name_en, ' ', '')) LIKE '%shatin%'" in prompt
+    # Institution counts use the authoritative inventory, not general OSM rows.
+    assert "sensitive_area" in prompt
+    assert "EDUCATIONAL_INSTITUTION" in prompt
+    assert "FROM sensitive_area sa, air_quality_station s" in prompt
 
 
 def test_prompt_includes_knowledge_base_and_tools():
@@ -41,8 +48,8 @@ def test_prompt_includes_knowledge_base_and_tools():
     assert "`aqhi = 11`" in prompt
 
     # Both AQO regimes, because the 2025 window crosses 2025-04-11.
-    assert "From 2025-04-11" in prompt
-    assert "From 2022-01-01 to 2025-04-10" in prompt
+    assert "Current (from 2025-04-11)" in prompt
+    assert "Previous (2022-01-01" in prompt
     assert "24h 37.5" in prompt
     assert "24h 50" in prompt
 
@@ -53,7 +60,7 @@ def test_prompt_includes_knowledge_base_and_tools():
     # Tool docstrings and examples.
     assert "geocode(address)" in prompt
     assert "charts.line(" in prompt
-    assert "geocode('The University of Hong Kong')" in prompt
+    assert "geocode('Hong Kong Observatory')" in prompt
 
 
 def test_literal_braces_survive_assembly():
@@ -70,10 +77,10 @@ def test_prompt_size_is_bounded():
 
 
 def test_schema_lists_every_exposed_table():
-    rendered = render_schema()
+    rendered = "\n" + render_schema()
     for table in SCHEMA:
-        assert f"Table {table}:" in rendered
-    assert "Table land_use_zone" not in rendered
+        assert f"\n{table}:" in rendered
+    assert "\nland_use_zone:" not in rendered
 
 
 def test_prompt_injects_live_coverage_and_inventory():
@@ -92,5 +99,5 @@ def test_prompt_injects_live_coverage_and_inventory():
         runtime.close()
 
     assert "hourly_station_air_quality.datetime: 2025-01-01 00:00:00" in prompt
-    assert "Tai Po [taipo] GENERAL" in prompt
+    assert "Tai Po [taipo]" in prompt
     assert "The database is historical only" in prompt

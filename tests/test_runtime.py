@@ -131,16 +131,36 @@ def test_render_limit_and_truncation():
 
 
 def test_agent_env_has_no_admin_dsn(monkeypatch):
-    """The agent loader must not export the admin DSN, and still must not leak it."""
-    monkeypatch.delenv("DB_URL_ADMIN", raising=False)
+    """The agent loader must not export the admin DSN, and still must not leak it.
+
+    This test must pass on a clean checkout with no `.env` and no admin file, so
+    it patches the two file readers instead of depending on local secrets.
+    """
+    import core.env as env_module
+
+    ro_url = "postgresql+psycopg2://neuro_ro:test@127.0.0.1:5432/airdb"
+    admin_dsn = "postgresql+psycopg2://postgres:test@127.0.0.1:5432/airdb"
+
+    monkeypatch.setattr(env_module, "_file_values", lambda: {"DB_URL_RO": ro_url})
+    monkeypatch.setattr(env_module, "_admin_values", lambda: {"DB_URL_ADMIN": admin_dsn})
+    monkeypatch.setenv("DB_URL_RO", ro_url)
+    for key in (
+        "DB_URL_ADMIN",
+        "POSTGRES_PASSWORD",
+        "POSTGRES_USER",
+        "POSTGRES_DB",
+        "NEURO_ADMIN_ENV",
+    ):
+        monkeypatch.delenv(key, raising=False)
+
     load_agent_env(override=True, scrub=True)
 
-    assert os.environ.get("DB_URL_RO"), "the read-only DSN should be exported"
+    assert os.environ.get("DB_URL_RO") == ro_url
     assert "DB_URL_ADMIN" not in os.environ
     assert "POSTGRES_PASSWORD" not in os.environ
 
     # Truth queries still get the DSN, returned rather than exported.
-    assert admin_url().startswith("postgresql")
+    assert admin_url() == admin_dsn
     assert "DB_URL_ADMIN" not in os.environ
 
 

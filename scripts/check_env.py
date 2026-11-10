@@ -6,7 +6,7 @@
 Checks, in order:
   1. interpreter version and venv
   2. every dependency imports
-  3. .env exists and has the required keys
+  3. .env exists and has the required keys, and the admin-only file can be loaded
   4. the LLM endpoint answers /models and serves LLM_MODEL
   5. the database answers and reports its PostGIS version
 """
@@ -37,7 +37,7 @@ LIBS = [
     ("statsmodels", "statsmodels"),
 ]
 
-REQUIRED_ENV = ["LLM_BASE_URL", "LLM_API_KEY", "LLM_MODEL", "DB_URL_ADMIN"]
+REQUIRED_ENV = ["LLM_BASE_URL", "LLM_API_KEY", "LLM_MODEL", "DB_URL_RO", "DB_URL_ADMIN"]
 
 MARK = {"ok": "[ ok ]", "warn": "[skip]", "fail": "[FAIL]"}
 
@@ -94,12 +94,23 @@ def check_env_file(rep: Report) -> bool:
         return False
 
     load_dotenv(env_path, override=True)
+    if str(ROOT) not in sys.path:
+        sys.path.insert(0, str(ROOT))
+    from core.env import load_admin_env
+
+    try:
+        admin_path = load_admin_env(override=True)
+    except RuntimeError as exc:  # noqa: BLE001
+        rep.add("fail", "admin env", str(exc))
+        return False
+
     absent = [k for k in REQUIRED_ENV if not os.environ.get(k)]
     if absent:
         rep.add("fail", ".env", f"missing keys: {', '.join(absent)}")
         return False
 
     rep.add("ok", ".env", f"LLM_MODEL={os.environ['LLM_MODEL']}")
+    rep.add("ok", "admin env", f"{admin_path} (outside the repository)")
     return True
 
 

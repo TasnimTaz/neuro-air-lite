@@ -32,10 +32,20 @@ def log(message: str) -> None:
 
 
 def load_env() -> None:
-    """Load .env once, before any DB or API call."""
+    """Load the repo `.env` and the admin-only file before any DB/API call.
+
+    The admin DSN and POSTGRES_* live outside the repository (default
+    `~/.neuro-air/admin.env`, override with `NEURO_ADMIN_ENV`). The repo `.env`
+    is model-readable, so it must not contain them.
+    """
     from dotenv import load_dotenv
 
+    if str(ROOT) not in sys.path:
+        sys.path.insert(0, str(ROOT))
+    from core.env import load_admin_env
+
     load_dotenv(ROOT / ".env", override=True)
+    load_admin_env(override=True)
 
 
 def fetch(

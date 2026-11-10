@@ -1,9 +1,14 @@
-"""Day 4 acceptance gate: schema prompt, chart tool, geocoder, 15-query baseline.
+"""Day 4 tool/smoke gate: schema prompt, chart tool, geocoder, 15-query v1 smoke.
 
     uv run python scripts/check_day4.py
     uv run python scripts/check_day4.py --only 3 7 12
     uv run python scripts/check_day4.py --show-trace
     uv run python scripts/check_day4.py --skip-probes
+
+This is the Day 4 implementation check, not the Day 9 reference. `evals/hk_baseline.py`
+is **smoke set v1**, and it is contaminated: three of its questions were worked
+examples in the old prompt. The frozen reference is `evals/hk_baseline_v2.py`,
+run by `evals/run_baseline.py`.
 
 The Day 3 gate proved one agent can answer questions from SQL. Day 4 adds three
 capabilities the paper's analysts need and the plan requires:
@@ -14,10 +19,10 @@ capabilities the paper's analysts need and the plan requires:
   3. a host-side `charts` tool that turns query results into ECharts configs.
 
 Static capability probes check the tools without the LLM. Two live probes then
-check that the model actually calls them. The 15-question baseline is the plan's
-Done-when: at least 10 must pass. Ground truth is recomputed from the database and
-compared with the pinned values in `evals/hk_baseline.py`; a mismatch is printed
-and saved in the artifact rather than silently accepted.
+check that the model actually calls them. The 15-question v1 smoke run keeps the
+plan's Day 4 Done-when: at least 10 must pass. Ground truth is recomputed from
+the database and compared with the pinned values in `evals/hk_baseline.py`; a
+mismatch is printed and saved in the artifact rather than silently accepted.
 
 Artifacts: `runs/day4_baseline.json` and `runs/day4_chart.html` (both gitignored).
 """

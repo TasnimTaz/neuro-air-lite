@@ -10,6 +10,7 @@ or change structure. Exits non-zero on any failure.
 from __future__ import annotations
 
 import os
+import sys
 import time
 from pathlib import Path
 
@@ -17,6 +18,10 @@ from dotenv import load_dotenv
 from sqlalchemy import create_engine, text
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+from core.env import load_admin_env  # noqa: E402
+
 ROLE = "neuro_ro"
 STATEMENT_TIMEOUT = "5s"
 STATEMENT_TIMEOUT_SETTING = "5000ms"
@@ -284,6 +289,7 @@ def check_postgis(ro_url: str) -> None:
 
 def main() -> int:
     load_dotenv(ROOT / ".env", override=True)
+    load_admin_env(override=True)
     admin_url = os.environ["DB_URL_ADMIN"]
     ro_url = os.environ["DB_URL_RO"]
 
