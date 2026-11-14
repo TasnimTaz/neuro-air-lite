@@ -97,6 +97,14 @@ class PipelineResult:
     ok: bool
     verifier_text: str = ""
     plan_error: str = ""
+    # The synthesis answer is snapshotted before the verifier starts. This gives
+    # a free "multi without verifier" ablation from the same run.
+    answer_pre_verify: Any = None
+    final_text_pre_verify: str = ""
+    verifier_mode: str = "overwrite"
+    verifier_changed_answer: bool = False
+    verifier_mismatch: bool = False
+    stall_count: int = 0
 
     @property
     def planner_tokens(self) -> int:
@@ -118,7 +126,32 @@ class PipelineResult:
             "total_tokens": self.total_tokens,
             "verifier_text": self.verifier_text,
             "ok": self.ok,
+            "answer_pre_verify": self.answer_pre_verify,
+            "final_text_pre_verify": self.final_text_pre_verify,
+            "verifier_mode": self.verifier_mode,
+            "verifier_changed_answer": self.verifier_changed_answer,
+            "verifier_mismatch": self.verifier_mismatch,
+            "stall_count": self.stall_count,
         }
+
+
+_UNSET = object()
+
+
+def _answer_snapshot(runtime: PythonRuntime) -> Any:
+    return runtime.ns["ANSWER"] if "ANSWER" in runtime.ns else _UNSET
+
+
+def _answers_equal(left: Any, right: Any) -> bool:
+    """Compare ANSWER snapshots without assuming a particular scalar type."""
+    if left is _UNSET and right is _UNSET:
+        return True
+    if left is _UNSET or right is _UNSET:
+        return False
+    try:
+        return bool(left == right)
+    except Exception:  # noqa: BLE001 - arrays and other odd values
+        return repr(left) == repr(right)
 
 
 def fallback_plan(query: str) -> list[dict[str, str]]:
@@ -214,17 +247,26 @@ def _worker_system(
         if verifier
         else "VARIABLES ALREADY IN THE SHARED RUNTIME:"
     )
+    # The domain prompt (shared_rules) must remain the byte-identical prefix of
+    # every worker prompt. Only the delimited role addendum and the runtime
+    # manifest may follow it; neither may add schema/data facts.
     return "\n\n".join(
         [
-            role_prompt,
             shared_rules,
+            "DELIMITED ROLE ADDENDUM (procedure only; not new schema facts):",
+            role_prompt,
             f"{stage}\n{_manifest_text(runtime)}",
             f"YOUR SUBTASK:\n{task}",
         ]
     )
 
 
-def _stall_guarded_llm(llm: LLM, role: str, emit: Emit) -> LLM:
+def _stall_guarded_llm(
+    llm: LLM,
+    role: str,
+    emit: Emit,
+    on_stall: Callable[[], None] | None = None,
+) -> LLM:
     """Stop a worker that repeats the identical code block.
 
     The model occasionally retries a failing query verbatim until its budget is
@@ -248,6 +290,8 @@ def _stall_guarded_llm(llm: LLM, role: str, emit: Emit) -> LLM:
                 last_code = code
                 repeats = 0
             if repeats >= 1:
+                if on_stall is not None:
+                    on_stall()
                 emit("worker_stall", {"role": role, "repeats": repeats})
                 return (
                     "I stopped because the identical code block was about to run again. "
@@ -286,6 +330,7 @@ async def run_pipeline(
     max_total: int = DEFAULT_MAX_TOTAL,
     verify_reserve: int = DEFAULT_VERIFY_RESERVE,
     synth_reserve: int = DEFAULT_SYNTH_RESERVE,
+    verifier_mode: str = "overwrite",
     emit: Emit = lambda *a: None,
 ) -> PipelineResult:
     """Run planner -> workers -> independent verifier on one shared runtime.
@@ -293,8 +338,22 @@ async def run_pipeline(
     ``max_total`` is the solver-step budget (workers plus verifier). The planner
     call is recorded separately. The worker loop's step count is authoritative,
     so a no-code nudge or a malformed turn is charged like any other LLM call.
+
+    ``verifier_mode`` is one of:
+
+    ``overwrite``
+        current Day 5 behaviour: the verifier may assign ``ANSWER``.
+    ``flag``
+        the verifier runs and prints its audit, but its ANSWER assignment is
+        reverted; the synthesis answer remains the scored answer.
+    ``none``
+        skip the verifier and give its reserve to the producer pool.
     """
+    if verifier_mode not in {"overwrite", "flag", "none"}:
+        raise ValueError(f"unknown verifier_mode: {verifier_mode!r}")
     max_total = max(1, int(max_total))
+    if verifier_mode == "none":
+        verify_reserve = 0
     verify_reserve = max(0, min(int(verify_reserve), max_total - 1))
     plan_budget = max(1, max_total - verify_reserve)
     synth_reserve = max(0, min(int(synth_reserve), plan_budget - 1))
@@ -320,6 +379,11 @@ async def run_pipeline(
     used = 0
     worker_runs: list[WorkerRun] = []
     final_text = ""
+    stall_count = 0
+
+    def note_stall() -> None:
+        nonlocal stall_count
+        stall_count += 1
 
     for index, step in enumerate(plan):
         if used >= plan_budget:
@@ -345,7 +409,7 @@ async def run_pipeline(
         system = _worker_system(role_prompt, shared_rules, runtime, task)
         emit("worker_start", {"role": role, "task": task, "budget": budget})
         result = await run_worker(
-            llm=_stall_guarded_llm(llm, role, emit),
+            llm=_stall_guarded_llm(llm, role, emit, note_stall),
             runtime=runtime,
             system=system,
             task=task,
@@ -359,11 +423,19 @@ async def run_pipeline(
         if used >= plan_budget:
             break
 
+    # Snapshot the synthesis result before the verifier can touch the runtime.
+    # This is the "multi without verifier" arm and costs no extra run.
+    pre_answer_raw = _answer_snapshot(runtime)
+    answer_pre_verify = None if pre_answer_raw is _UNSET else pre_answer_raw
+    final_text_pre_verify = final_text
+
     # The verifier is independent and gets only the reserve that remains. The
     # reserve is capped so a verifier can never turn a 20-step run into 21.
     verify_budget = min(verify_reserve, max_total - used)
     verifier_text = ""
-    if verify_budget > 0:
+    verifier_changed_answer = False
+    verifier_mismatch = False
+    if verifier_mode != "none" and verify_budget > 0:
         verify_task = query + task_suffix
         verify_system = _worker_system(
             role_prompts["verification"],
@@ -377,7 +449,7 @@ async def run_pipeline(
             {"role": "verification", "task": verify_task, "budget": verify_budget},
         )
         verifier = await run_worker(
-            llm=_stall_guarded_llm(llm, "verification", emit),
+            llm=_stall_guarded_llm(llm, "verification", emit, note_stall),
             runtime=runtime,
             system=verify_system,
             task=verify_task,
@@ -387,8 +459,22 @@ async def run_pipeline(
         used += verifier.steps
         worker_runs.append(_run_record("verification", verify_task, verify_budget, verifier))
         verifier_text = verifier.final_text.strip()
-        if verifier_text:
-            final_text = verifier_text
+        post_answer_raw = _answer_snapshot(runtime)
+        verifier_changed_answer = not _answers_equal(pre_answer_raw, post_answer_raw)
+        verifier_mismatch = verifier_changed_answer or "MISMATCH" in verifier_text.upper()
+
+        if verifier_mode == "flag":
+            # The verifier's audit is evidence, not an authority. Put the
+            # synthesis answer back and score the pre-verifier result.
+            if pre_answer_raw is _UNSET:
+                runtime.ns.pop("ANSWER", None)
+            else:
+                runtime.ns["ANSWER"] = pre_answer_raw
+            final_text = final_text_pre_verify or verifier_text
+        else:
+            # overwrite: the current Day 5 behaviour.
+            if verifier_text:
+                final_text = verifier_text
 
     ok = bool(final_text.strip()) and final_text.strip() != BUDGET_EXHAUSTED_SENTINEL
     if not ok and not final_text.strip():
@@ -412,4 +498,10 @@ async def run_pipeline(
         ok=ok,
         verifier_text=verifier_text,
         plan_error=plan_error,
+        answer_pre_verify=answer_pre_verify,
+        final_text_pre_verify=final_text_pre_verify,
+        verifier_mode=verifier_mode,
+        verifier_changed_answer=verifier_changed_answer,
+        verifier_mismatch=verifier_mismatch,
+        stall_count=stall_count,
     )

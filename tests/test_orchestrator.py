@@ -217,7 +217,124 @@ async def test_budget_is_never_exceeded_and_repeated_code_is_stopped():
     assert result.total_calls == 1 + result.solver_steps
     assert result.final_text
     assert "identical code block" in result.final_text
+    assert result.stall_count >= 1
     assert any(
         run.role == "data_acquisition" and run.steps <= 2
         for run in result.worker_runs
     )
+
+
+async def test_verifier_flag_mode_restores_the_synthesis_answer():
+    llm = ScriptedLLM(
+        [
+            '[{"role": "data_acquisition", "task": "stage 7"}, '
+            '{"role": "synthesis_report", "task": "answer"}]',
+            "```python\nstaged = 7\nprint(staged)\n```",
+            "staged seven",
+            "```python\nANSWER = 7\nprint(ANSWER)\n```",
+            "staged seven final",
+            "```python\nANSWER = 8\nprint('VERIFY ANSWER: stored=7 | independent=8 | final=8')\n```",
+            "verified eight",
+        ]
+    )
+    runtime = PythonRuntime()
+
+    result = await run_pipeline(
+        llm=llm,
+        runtime=runtime,
+        role_prompts=_roles(),
+        shared_rules=_system(),
+        coordinator_system="coordinator",
+        query="test question",
+        max_total=8,
+        verify_reserve=3,
+        synth_reserve=1,
+        verifier_mode="flag",
+        emit=lambda *a: None,
+    )
+
+    assert result.answer_pre_verify == 7
+    assert result.final_text_pre_verify == "staged seven final"
+    assert result.final_text == "staged seven final"
+    assert runtime.ns["ANSWER"] == 7
+    assert result.verifier_changed_answer is True
+    assert result.verifier_mismatch is True
+    assert result.verifier_text == "verified eight"
+    assert result.worker_runs[-1].role == "verification"
+    assert result.solver_steps <= 8
+
+
+async def test_verifier_none_mode_skips_verifier_and_reclaims_its_budget():
+    llm = ScriptedLLM(
+        [
+            '[{"role": "data_acquisition", "task": "stage 7"}, '
+            '{"role": "synthesis_report", "task": "answer"}]',
+            "```python\nstaged = 7\nprint(staged)\n```",
+            "staged seven",
+            "```python\nANSWER = 7\nprint(ANSWER)\n```",
+            "staged seven final",
+        ]
+    )
+    runtime = PythonRuntime()
+
+    result = await run_pipeline(
+        llm=llm,
+        runtime=runtime,
+        role_prompts=_roles(),
+        shared_rules=_system(),
+        coordinator_system="coordinator",
+        query="test question",
+        max_total=6,
+        verify_reserve=3,
+        synth_reserve=1,
+        verifier_mode="none",
+        emit=lambda *a: None,
+    )
+
+    assert [run.role for run in result.worker_runs] == [
+        "data_acquisition",
+        "synthesis_report",
+    ]
+    assert result.answer_pre_verify == 7
+    assert result.final_text == "staged seven final"
+    assert result.verifier_mode == "none"
+    assert result.verifier_changed_answer is False
+    assert result.solver_steps <= 6
+
+
+async def test_worker_prompt_starts_with_shared_domain_prompt():
+    llm = ScriptedLLM(
+        [
+            '[{"role": "data_acquisition", "task": "stage"}]',
+            "```python\nstaged = 1\nprint(staged)\n```",
+            "done",
+            "```python\nANSWER = staged\nprint(ANSWER)\n```",
+            "final",
+        ]
+    )
+    runtime = PythonRuntime()
+    base = "BYTE-IDENTICAL DOMAIN PROMPT"
+
+    await run_pipeline(
+        llm=llm,
+        runtime=runtime,
+        role_prompts=_roles(),
+        shared_rules=base,
+        coordinator_system="coordinator",
+        query="test question",
+        max_total=4,
+        verify_reserve=0,
+        synth_reserve=0,
+        verifier_mode="none",
+        emit=lambda *a: None,
+    )
+
+    # The first call is the coordinator, which does not receive the domain
+    # prompt. Every worker system prompt must begin with the same base bytes.
+    worker_systems = [
+        messages[0]["content"]
+        for messages in llm.messages[1:]
+        if messages and messages[0]["role"] == "system"
+    ]
+    assert worker_systems
+    assert all(system.startswith(base + "\n\nDELIMITED ROLE ADDENDUM") for system in worker_systems)

@@ -390,6 +390,7 @@ domains/hk/viz.py              EChartsConfigManager.line/bar/to_json/save_html
 evals/hk_baseline.py           smoke set v1 (contaminated; not the baseline)
 evals/hk_baseline_v2.py        frozen 20-case reference, six hold-outs
 evals/run_baseline.py          prompt sha256 + model + repeats -> runs/baseline/*.json
+evals/compare_arms.py          offline re-score + task-level paired comparison
 scripts/check_day4.py          tool probes + v1 smoke run + runs/day4_baseline.json
 tests/test_prompt_leakage.py   12-token leakage guard over v1 and v2
 ```
@@ -515,17 +516,38 @@ Run it with:
 uv run python evals/run_baseline.py --validate-only
 uv run python evals/run_baseline.py --repeats 3
 uv run python evals/run_baseline.py --arm multi --repeats 3
+uv run python evals/run_baseline.py --arm multi --repeats 3 --resume runs/multi/<run>
+uv run python evals/run_baseline.py --model <model> --base-url <openai-compatible-url> --api-key-env <ENV_NAME>
 ```
 
 The runner records the model, the prompt sha256, the pinned and recomputed truth
 values, per-case steps/tokens/seconds, first-attempt status, code blocks and
 outputs in `runs/baseline/<timestamp>/run.json`, plus the exact prompt in
-`prompt.txt`. The multi arm writes to `runs/multi/<timestamp>/` and also records
-`multi_prompts.txt`, the plan and every worker's step/token ledger. A truth
+`prompt.txt`. Every `(case, repeat)` is also written atomically as soon as it
+finishes under `cases/`, so a killed process loses at most one case; `--resume`
+skips finished files and rebuilds `run.json` at the end. `run_meta.json` records
+the prompt hashes, model, budget, scorer and verifier mode and is checked before
+a resume.
+
+The multi arm writes to `runs/multi/<timestamp>/` and also records
+`multi_prompts.txt`, the plan and every worker's step/token ledger. It snapshots
+`answer_pre_verify` before the verifier runs, so the same artifact supports a
+"multi without verifier" ablation. `--verifier-mode overwrite|flag|none`
+selects the verifier behaviour; the default remains `overwrite`. A truth
 mismatch stops the run instead of silently moving the benchmark. `--no-holdout`
 is for prompt work and must not be used for the frozen reference.
 
-#### Frozen v2 results (strict scorer)
+Scoring is versioned. Scorer `v1` is the frozen Day 4 matcher; `v2` only extends
+the accepted no-data/unanswerable wording and leaves every numeric rule
+unchanged; `semantic` is a broader audit view. The runner stores `pass_v1`,
+`pass_v2` and `semantic_pass` for every case, and `--scorer` selects the primary
+one (`v2` by default). Historical artifacts are re-scored offline by
+`evals/compare_arms.py`. Scorer v2 was frozen before the official Day 5b run; an
+aborted first attempt that exposed one omitted pre-registered phrase (`could
+not`) is retained under `runs/multi/day5b_v2_budget20_3x_pre_scorer_fix/` and is
+not an official result. See `docs/multiagent_failure_log.md`.
+
+#### Frozen v2 results (scorer v2)
 
 Both artifacts use the same frozen prompt, model, questions and truth SQL:
 
@@ -538,7 +560,11 @@ The **20-step** run is the single-arm matched-budget reference for Day 9:
 `runs/baseline/day4_v2_budget20/run.json` (generated
 2026-11-10T14:41:21Z), model `qwen2.5-coder:14b`, prompt sha256
 `ab5ef7e968ba542a367164e01fd54470672d48ec4556ac9f0ef96627b61b3048`,
-three repeats. Truth validation passed 20/20 before the run.
+three repeats. Truth validation passed 20/20 before the run. The committed
+`docs/baseline_v2_summary.json` records the model, hashes, per-case counts and
+both scorer versions. The prompt sha256 includes the live data-window text
+injected by `get_system_prompt`, so it cannot be recomputed offline from the
+repository alone.
 
 | Repeat | Passed | Hold-out | Non-hold-out | First attempt | Mean steps | Tokens | Wall-clock |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -575,14 +601,17 @@ By category: retrieval 100.0%, temporal 83.3%, spatial 100.0%, statistics
 50.0%. The four repeat-zero cases are still `#14`, `#15`, `#18`, `#20`; `#5`
 now passes only once. The 20-step budget did **not** remove the prompt-level
 weather-join failure, and `#18`/`#20` still fail for distinct SQL reasons.
-`docs/failure_log.md` has the code-level evidence.
+`docs/failure_log.md` has the code-level evidence; the official Day 5b
+multi-arm measurement and verifier audit are in
+`docs/multiagent_failure_log.md`.
 
 The 10-step artifact (`runs/baseline/20261110_191651/run.json`) remains the
-historical Day 4 reference. Its strict score was 44/60; a semantic audit counted
-two correct NULL answers (`#3` repeat 2 and `#16` repeat 3) and gave 46/60. The
-scorer was not changed after the freeze. In the 20-step run `#3` and `#16` pass
-3/3, so its strict and semantic scores are both 46/60. Do not compare the
-10-step table with a 20-step multi-agent arm.
+historical Day 4 reference. Its v1 score was 44/60; a semantic audit counted two
+correct NULL answers (`#3` repeat 2 and `#16` repeat 3) and gave 46/60. The
+frozen score is not rewritten: v1 is kept, and scorer v2 only accepts the wider
+no-data wording. In the 20-step run `#3` and `#16` pass 3/3, so its v1 and v2
+scores are both 46/60. Do not compare the 10-step table with a 20-step
+multi-agent arm.
 
 ### Day 4 deviations and limits
 
@@ -629,13 +658,16 @@ response falls back to the conservative four-role checklist. Every worker gets a
 fresh chat history and the **same shared `PythonRuntime`**, so variables staged by
 one worker are visible to the next. The roles live in `domains/hk/roles.py`.
 
-The two arms use the same frozen v2 prompt, cases, model and strict scorer. The
-multi arm adds role paragraphs and shared-runtime rules, but no v2 question,
-truth value or `wx_` worked example; the prompt-leakage test covers those strings
-too. The run command is:
+The two arms use the same frozen v2 base prompt, cases, model and scorer. The
+base prompt is the byte-identical prefix of every worker system prompt; the
+multi arm appends a delimited role addendum and the shared-runtime rules, while
+the single arm keeps the base prompt and its task hint. The addendum contains
+procedure only: no v2 question, truth value, station id or `wx_` worked example.
+The prompt-leakage test covers those strings too. The run command is:
 
 ```powershell
 uv run python evals/run_baseline.py --arm multi --repeats 3
+uv run python evals/compare_arms.py --single runs/baseline/day4_v2_budget20 --multi runs/multi/<run>
 ```
 
 ### Budget ledger
@@ -658,31 +690,74 @@ in every artifact.
 A runtime stall guard stops a worker that tries to execute the identical code
 block twice. It does not supply SQL or an answer; it only prevents one role from
 consuming the whole producer pool in a retry loop. The verifier still gets its
-reserve and can overwrite `ANSWER` only after a fresh recomputation.
+reserve and can overwrite `ANSWER` only after a fresh recomputation. The guard
+count is stored per case as `stall_count`; the single arm has no guard in the
+frozen baseline, so the single count is zero by construction, not a comparison.
 
-### Day 5 result (1 repeat; 3-repeat interrupted)
+`--verifier-mode overwrite` is the default Day 5 behaviour. `flag` runs the same
+verifier but restores the synthesis `ANSWER` afterwards; `none` skips the
+verifier and gives its six steps back to the producers. `answer_pre_verify` and
+`final_text_pre_verify` are snapshotted before the verifier in every mode.
 
-The usable full multi run uses the same 20 cases and frozen prompt and finished
-at 2026-11-10T16:15:58Z. It scored **11/20 strict (55.0%)**, with a manual
-semantic audit of 13/20: `#3` and `#16` gave the correct “no … available” answer
-but the strict text rule did not accept their wording. A 3-repeat attempt was
-started with the same prompt hash but the background process ended during
-repeat 1 at case `#19`; no `run.json` was produced, so that attempt is not used
-and no 3-repeat multi score is claimed.
+### Day 5b official result (3 repeats, matched 20-step solver budget)
 
-| Arm | Budget | Strict | Semantic | Repeats | Hold-out | Mean steps | Calls | Tokens |
+The official multi run uses the same frozen v2 questions, truth SQL, base prompt,
+model, temperature and scorer as the single arm. It finished all 60 case-runs
+(20 tasks × 3 repeats) after one resume; the artifact records `resumed: true`.
+The multi process had exited at 34/60 saved cases, so the in-flight case was
+rerun exactly once.
+
+| Arm | Budget | v1 | v2 (primary) | Semantic | Repeats | Hold-out | Tokens | Seconds |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Single v2 (Day 4) | 20 | 46/60 (76.7%) | **46/60 (76.7%)** | 46/60 | 15/16/15 | 12/18 (66.7%) | 588,512 | 755.3 |
+| Multi v2 (Day 5b) | 20 + planner | 37/60 (61.7%) | **41/60 (68.3%)** | 41/60 | 15/13/13 | 11/18 (61.1%) | 3,065,202 | 6,877.5 |
+
+The multi arm is **5 case-runs lower** than the single arm. The task-level
+comparison is **2 wins, 8 losses, 10 ties** (`#15`, `#18` wins; losses `#4`,
+`#5`, `#7`, `#8`, `#13`, `#16`, `#17`, `#19`). The exact McNemar/binomial test
+gives **p=0.1094**, and the paired task bootstrap is **−0.083**, 95% CI
+**[-0.183, +0.033]**. This is a negative/null result: the point estimate is
+worse, but 20 tasks do not reject the null. It is not evidence of a multi-agent
+gain.
+
+The verifier is doing most of the work. Before the verifier the multi arm passes
+only **13/60 (21.7%)**; after `overwrite` it passes **41/60 (68.3%)**. The audit
+is **28 wrong→right, 0 right→wrong, 13 right→right, 19 wrong→wrong**, with 37
+changed answers. The 0 right→wrong count uses the stored pre-pass flag and still
+hides a text regression in `#16` repeat 1 (correct refusal sentence, `NaN`
+`ANSWER`, then an ambiguous-station message). The final multi score is a
+worker-plus-verifier result, not evidence that the worker handoff alone works.
+
+Cost per case is **5.21× tokens, 9.11× wall-clock and 4.45× calls**. The multi
+run used 688 solver steps (525 producer + 163 verifier), 34 stall events, 60
+planner calls and 28,687 planner tokens. The planner call remains outside the
+20-step solver cap, so this is a lower bound on an all-call budget. All 19 failed
+case-runs are classified in
+[`docs/multiagent_failure_log.md`](docs/multiagent_failure_log.md): 13 are the
+weather-pairing/join cluster, 10 involved the stall guard, and the rest are stale
+or non-finite answers, wrong aggregation, or entity resolution.
+
+#### Day 5 preliminary 1-repeat (historical)
+
+The earlier usable 1-repeat multi run used the same frozen prompt and finished at
+2026-11-10T16:15:58Z. It scored **11/20 with scorer v1 (55.0%)** and **13/20
+with scorer v2** after an offline re-score: `#3` and `#16` gave the correct “no …
+available” answer but the v1 text rule did not accept their wording. A 3-repeat
+attempt was started with the same prompt hash but the background process ended
+during repeat 1 at case `#19`; no `run.json` was produced, so that attempt is not
+used. The official 3-repeat result above supersedes this signal.
+
+| Arm | Budget | v1 | v2 | Repeats | Hold-out | Mean steps | Calls | Tokens |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | Single v2 (Day 4) | 20 | 46/60 (76.7%) | 46/60 | 15/16/15 | 12/18 (66.7%) | 2.8 | 168 | 588,512 |
-| Multi v2 | 20 + planner | 11/20 (55.0%) | 13/20 | 11/20 | 3/6 (50.0%) | 11.3 | 246 | 978,423 |
+| Multi v2 (1-repeat) | 20 + planner | 11/20 (55.0%) | 13/20 | 11/20 | 3/6 (50.0%) | 11.3 | 246 | 978,423 |
 
-The single row is 60 case-runs and the multi row is 20; this is not a
-like-for-like repeat-count comparison, only a signal that the multi arm did not
-improve. The multi run used 177 producer steps, 49 verifier steps and 20 planner calls
-(9,456 planner tokens). It added no case that the single arm failed, and
+The 1-repeat multi run used 177 producer steps, 49 verifier steps and 20 planner
+calls (9,456 planner tokens). It added no case that the single arm failed and
 regressed on `#3`, `#4`, `#16` and `#17`; `#5`, `#14`, `#15`, `#18` and `#20`
-failed in both arms. In particular, `#4` left a stale `ANSWER` after the verifier
-said “not available”, and `#14` had a correct synthesis value (3.51) that the
-verifier discarded. The weather-join failures were unchanged.
+failed in both arms. `#4` left a stale `ANSWER` after the verifier said “not
+available”, and `#14` had a correct synthesis value (3.51) that the verifier
+discarded. The weather-join failures were unchanged.
 
 ### Day 5 deviations and limits
 
@@ -694,19 +769,30 @@ verifier discarded. The weather-join failures were unchanged.
    in every artifact as `planner_calls` and `total_calls`; it preserves the
    plan's 11-step producer pool. An all-call 19-step sensitivity run is still
    required before any claim that includes orchestration overhead.
-3. **The role prompts were smoke-tested before the full multi run.** Two
+3. **The role prompts were smoke-tested before the full multi runs.** Two
    non-hold-out smoke cases (`#1`, `#5`) exposed a stalled worker and an
    over-eager knowledge worker; the generic stop/read-the-error and
    measured-value rules in `domains/hk/roles.py` were added before the full
-   1-repeat run. The v2 questions and truth SQL were not changed, and the multi
-   prompt hash is recorded in the artifact.
-4. **A strict score is primary.** A manual semantic audit is reported separately
-   because the strict text rule rejects some correct “no … available” answers.
-   Changing that rule after seeing results would move the benchmark.
-5. **The weather-join ambiguity is still present.** The multi arm uses the same
-   frozen schema prompt as the single arm, so it cannot repair the missing
+   1-repeat run and unchanged for Day 5b. The v2 questions and truth SQL were not
+   changed, and the multi prompt hash is recorded in the artifact.
+4. **Scorer v1 is primary history; v2 is primary for the Day 5b rerun.** Scorer
+   v2 only broadens the accepted “no data / unanswerable” wording; every numeric
+   rule is unchanged. v1, v2 and semantic scores are all stored per case, and
+   `evals/compare_arms.py` re-scores saved artifacts rather than trusting the
+   historical `pass` field. The rule was versioned and frozen before the official
+   Day 5b multi run; no scorer change is allowed after that result exists.
+5. **The weather-join ambiguity is the next controlled change.** The v2 multi arm
+   uses the same frozen schema prompt as the single arm, so it cannot repair the
+   missing
    `weather_station.station_code = 'wx_' || air_quality_station.station_code`
-   rule. A v3 prompt is a Day 6 change and requires rerunning both arms.
+   rule. The v3 prompt adds that rule to the base prompt, not to a role addendum,
+   and requires rerunning both arms.
+6. **The single v2 reference has no merged-role addendum.** The multi arm appends
+   procedure-only role text after the base prompt; the frozen single arm predates
+   that contract, so the Day 5b contrast is “multi topology + role procedures”
+   versus “single base prompt,” not topology alone. The v3 rerun adds the same
+   procedural role text to the single arm and reruns both arms; the v2 artifact
+   is not rewritten.
 
 ## Conventions
 
@@ -754,5 +840,6 @@ verifier discarded. The weather-join failures were unchanged.
 | 2 | HK data ingestion | done |
 | 3 | LLM client, runtime, security, single agent | done |
 | 4 | schema prompt, geocoder, charts, frozen v2 baseline | done |
-| 5 | coordinator, workers, verifier | implemented; multi 11/20 vs single 15/20 per repeat — Day 6 fix |
+| 5 | coordinator, workers, verifier | implemented; official 3-repeat 41/60 vs single 46/60 (p=0.109; 5.21× tokens) — no gain |
+| 5b | matched-budget multi audit, verifier modes, v3 prompt | multi audit done; v3 rerun next |
 | 6 | relevance gate, knowledge retrieval, verifier tuning | next |

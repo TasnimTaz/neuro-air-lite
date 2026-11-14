@@ -133,11 +133,11 @@ The earlier 10-step artifact is kept for audit:
 | 3 | 13/20 | 3/6 | 10/14 | 20/20 | 2.60 | 179,163 | 213.2s |
 | **Mean** | **73.3%** | **61.1%** | **78.6%** | **56/60** | **2.80** | **631,106** | **15.4s/case** |
 
-The strict score was **44/60 (73.3%)**. A semantic audit counted two correct
+The scorer-v1 score was **44/60 (73.3%)**. A semantic audit counted two correct
 NULL answers as passes (`#3` repeat 2 and `#16` repeat 3), giving 46/60 (76.7%).
-The strict artifact was not rewritten after the audit, and the scorer was not
-changed after the freeze. In the 20-step run both cases pass 3/3, so its strict
-and semantic scores are both 46/60.
+The artifact was not rewritten after the audit. Scorer v2 now accepts that
+no-data wording as a versioned rule; v1 remains the historical score. In the
+20-step run both cases pass 3/3, so its v1 and v2 scores are both 46/60.
 
 The 10-step per-case results were: #1 3/3, #2 3/3, #3 2/3, #4 3/3, #5 2/3,
 #6 3/3, #7 3/3, #8 3/3, #9 3/3, #10 3/3, #11 3/3, #12 3/3, #13 3/3,
@@ -154,9 +154,11 @@ The frozen `UNAVAILABLE` matcher accepts `not available`, `no data`,
 * `#16`, repeat 3: the row exists and `pm2_5` is NULL; the final text was
   `No PM2.5 reading available for Tai Po at noon on 7 January 2025.`
 
-Both answers are semantically correct. The 10-step strict score remains 44/60;
-the semantic audit is **46/60 (76.7%)**. The 20-step run does not contain these
-false negatives, so its 46/60 needs no semantic adjustment.
+Both answers are semantically correct. The 10-step v1 score remains 44/60;
+the v2 re-score is **46/60 (76.7%)**. The 20-step run does not contain these
+false negatives, so its v1 and v2 scores are both 46/60. The scorer change is
+versioned, not retroactive: every artifact stores `pass_v1`, `pass_v2` and
+`semantic_pass`.
 
 ## Failure taxonomy
 
@@ -366,15 +368,19 @@ though spatial questions are 100%.
 
 ### Protocol
 
+This section records the historical Day 5 1-repeat signal. The official Day 5b
+3-repeat measurement, verifier audit and scorer-v2 re-score are in
+`docs/multiagent_failure_log.md`; this section is kept for history.
+
 The multi arm uses the same 20 v2 questions, truth SQL, model, frozen domain
-prompt and strict scorer as the single arm. The coordinator produces a JSON plan
+prompt and scorer as the single arm. The coordinator produces a JSON plan
 of at most six steps; the last step is forced to `synthesis_report`. Workers get
 fresh chat histories and share one `PythonRuntime`. The fixed solver budget is
 20 steps: 11 producer, 3 synthesis reserve, 6 verifier reserve. The coordinator's
 planning call is recorded separately as one call and is not charged to the 20
-solver steps (see the all-call caveat below). The multi prompt hash is
+solver steps (see the all-call caveat below). The Day 5 multi addendum hash is
 `141925a0538b2e039cb0d4ac78589ff0ddd3a99e3e5a27b5cd322976289c23a1`; the frozen
-domain prompt hash remains
+domain base prompt hash remains
 `ab5ef7e968ba542a367164e01fd54470672d48ec4556ac9f0ef96627b61b3048`.
 
 The multi arm writes `runs/multi/<timestamp>/run.json` and
@@ -391,19 +397,22 @@ process had already exited when checked, with no error line after `[19/20]`.
 ### Usable 1-repeat
 
 `runs/multi/day5_v2_budget20_r1/run.json` (generated
-2026-11-10T16:15:58Z) scored **11/20 strict (55.0%)** and **13/20 semantic** in a
-manual audit. The two semantic additions are `#3` and `#16`: both returned the
-correct unavailable value with wording the strict matcher does not accept
-(`no CO data available`, `No PM2.5 reading available`), not a wrong number.
+2026-11-10T16:15:58Z) scored **11/20 with scorer v1 (55.0%)** and **13/20 with
+scorer v2** after an offline re-score. The two additions are `#3` and `#16`:
+both returned the correct unavailable value with wording the v1 matcher does not
+accept (`no CO data available`, `No PM2.5 reading available`), not a wrong
+number.
 
-| Arm | Strict | Semantic | Hold-out | Mean solver steps | Calls | Tokens |
+| Arm | v1 | v2 | Hold-out | Mean solver steps | Calls | Tokens |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | Single v2, 20 steps, 3 repeats | 46/60 (76.7%) | 46/60 | 12/18 (66.7%) | 2.8 | 168 | 588,512 |
 | Multi v2, 1 repeat | 11/20 (55.0%) | 13/20 | 3/6 (50.0%) | 11.3 | 246 | 978,423 |
 
 The single row is 60 case-runs; the multi row is 20. This is a signal that the
-multi arm is worse, not a like-for-like repeat-count comparison. A 3-repeat
-multi run is still required for the Day 9 table.
+multi arm is worse, not a like-for-like repeat-count comparison. At task level
+the old 1-repeat had **0 wins, 3 losses, 17 ties** (exact McNemar `p=0.25`;
+paired task bootstrap mean difference `-0.117`, 95% CI `[-0.267, 0.000]`). The
+official Day 5b 3-repeat comparison replaces this.
 
 The multi run used 177 producer steps, 49 verifier steps and 20 planner
 calls (9,456 planner tokens). It added no case that the single arm failed and
@@ -444,5 +453,6 @@ regressed on `#3`, `#4`, `#16` and `#17`. The four repeat-zero single-arm cases
 The PDF's Day 5 acceptance condition is `multi >= single`; the multi run does
 not meet it. The plan says to fix this in Day 6, not to tune the benchmark.
 A 19-step solver sensitivity run (charging the planner) and a v3 prompt that
-states the weather join are still required before any Day 9 claim. The strict
-scorer was not changed; the semantic count is an audit, not an official score.
+states the weather join are still required before any Day 9 claim. The scorer is
+now versioned: the historical 1-repeat was v1, and Day 5b reports both v1 and v2
+after an offline re-score. Scoring was frozen before the official 3-repeat run.
