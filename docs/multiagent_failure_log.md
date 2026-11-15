@@ -5,6 +5,11 @@ signal in `docs/failure_log.md`. The single-arm reference is the matched 20-step
 v2 run in `runs/baseline/day4_v2_budget20/run.json`; both arms use the same 20
 questions, truth SQL, model and base prompt.
 
+The v2 result below is frozen. A pre-registered v3 base-prompt rerun is recorded
+at the end of this file; it does **not** rewrite the v2 artifact, scorer or
+failure log. The v3 single arm is a fairness control, not a replacement for the
+frozen v2 single reference.
+
 ## Protocol
 
 | Item | Value |
@@ -234,8 +239,8 @@ test and paired task bootstrap are reported with the comparison.
 The frozen v2 single arm predates the merged-role addendum. It sees the same base
 prompt, but not the multi role procedures, so this comparison measures
 “multi topology plus role procedures” versus “single base prompt,” not topology
-alone. The v3 rerun should add the same procedural role text to the single arm
-(a merged-roles addendum) and rerun both arms; no v2 artifact is rewritten.
+alone. The v3 rerun did add the same procedural role text to the single arm
+(a merged-roles addendum) and reran both arms; no v2 artifact is rewritten.
 
 ## Reproduce
 
@@ -254,3 +259,228 @@ If the run is interrupted, resume with:
 uv run python evals/run_baseline.py --arm multi --repeats 3 \
   --resume runs/multi/day5b_v2_budget20_3x
 ```
+
+## v3 prompt rerun
+
+### v3 protocol
+
+The v2 result above is frozen. v3 changed only the shared base prompt: it now
+states the explicit air-quality/weather pairing rule
+
+```sql
+weather_station.station_code = 'wx_' || air_quality_station.station_code
+```
+
+and the common alias form `ws.station_code = 'wx_' || s.station_code`. It also
+says that the two hourly tables are joined through their own station rows and
+the two station-code namespaces, never by `station_id`. The v3 prompt is a
+prose rule, not a copied truth query; the leakage tests cover the rule and the
+merged-role text.
+
+The v2 questions, truth SQL, numeric tolerances, scorer and `ANSWER` contract
+are unchanged. The multi role addendum is byte-identical to v2. The single arm
+uses `--single-roles`, which appends a delimited, procedure-only
+`MERGED_ROLE_ADDENDUM` generated from `MULTI_RULES` and all five role prompts.
+This makes the comparison **multi topology plus role procedures** versus
+**single agent with the same base prompt and the same procedural text**, rather
+than topology alone. The v3 single is a fairness control; the frozen v2 single
+artifact remains the historical single reference.
+
+| Item | Value |
+| --- | --- |
+| Single artifact | `runs/baseline/day5b_v3_budget20_3x/run.json` |
+| Multi artifact | `runs/multi/day5b_v3_budget20_3x/run.json` |
+| Model | `qwen2.5-coder:14b` |
+| Base prompt sha256 (assembled) | `538596df6c0122fc57f5cc9fe4212ee9b92206095ae71f157f3c5288ffc0b89d` |
+| Single merged-role sha256 | `2c0a50e48797d11f7b2b8d416447681eb643e482ac39cc6a0117297c941e641d` |
+| Multi addendum sha256 | `141925a0538b2e039cb0d4ac78589ff0ddd3a99e3e5a27b5cd322976289c23a1` |
+| Base / merged role sizes | 10,347 chars / 5,018 chars |
+| Solver budget | 20 steps + 1 coordinator call |
+| Producer / synthesis / verifier reserve | 11 / 3 / 6 |
+| Repeats | 3, one attempt per task per repeat |
+| Primary scorer | v2 (v1 and semantic stored per case) |
+| Verifier mode | `overwrite` |
+
+The base prompt hash includes the live current-time/data-window text injected by
+`get_system_prompt`, so it is artifact-specific and cannot be recomputed from
+the repository alone. The single run was stopped deliberately after 51 saved
+case files and resumed; the multi process exited after 36 saved files and was
+resumed. In each resume, only the in-flight case was rerun, so no case was run
+twice for the final artifact. Both artifacts record `resumed: true`.
+
+### v3 results
+
+| Arm | v1 | v2 (primary) | Semantic | Repeats | Hold-out | Non-hold-out | Tokens | Seconds |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Single v3 + merged roles | 41/60 (68.3%) | **45/60 (75.0%)** | 45/60 | 14/16/15 | 11/18 (61.1%) | 34/42 (81.0%) | 1,015,175 | 2,680.7 |
+| Multi v3 | 38/60 (63.3%) | **40/60 (66.7%)** | 40/60 | 16/11/13 | 8/18 (44.4%) | 32/42 (76.2%) | 3,184,398 | 6,466.5 |
+
+| Arm | Mean steps | Calls | First attempt | Tokens/case | Seconds/case | Stalls |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Single v3 + merged roles | 2.70 | 162 | 52/60 | 16,920 | 44.7 | 0 |
+| Multi v3 | 11.63 | 758 | 38/60 | 53,073 | 107.8 | 37 |
+
+The multi arm is **5 case-runs lower** than the v3 single control (40 vs 45).
+The task-level comparison is **2 wins, 6 losses, 12 ties** (wins `#5`, `#15`;
+losses `#3`, `#4`, `#6`, `#8`, `#16`, `#17`). The exact McNemar/binomial test
+gives **p=0.2891**; the paired task bootstrap is **-0.083**, 95% CI
+**[-0.183, +0.017]** (5,000 task resamples, seed 20261114). The point estimate
+is negative and the task-level test does not reject the null. This is again a
+negative/null result, not evidence of a multi-agent gain.
+
+The explicit join did **not** improve the aggregate result. v3 multi is one
+case-run lower than v2 multi (40 vs 41); v3 single is one lower than v2 single
+(45 vs 46). The v3 single is not a like-for-like replacement for the v2 single
+because it now carries the merged role procedures. On the primary scorer, v3
+does not repair `#14` or `#20`; `#17` is still 0/3 for multi and 2/3 for single.
+
+Cost per case is **3.14x tokens, 2.41x wall-clock and 4.68x calls** relative to
+the v3 single control. Do not read that as an efficiency improvement over the
+v2 5.21x/9.11x ratios: the v3 single denominator is itself more expensive
+(1.73x tokens and 3.55x seconds versus v2 single) because of the merged role
+text. The multi absolute cost is roughly unchanged: 3.18M tokens and 6,466.5s
+versus v2's 3.07M tokens and 6,877.5s, with 758 versus 748 calls and 37 versus
+34 stalls. The planner call remains outside the 20-step solver cap, so this is
+still a lower bound on an all-call budget.
+
+### v3 category, difficulty and per-case counts
+
+| Group | Single v3 | Multi v3 |
+| --- | ---: | ---: |
+| retrieval | 12/12 (100%) | 10/12 (83.3%) |
+| temporal | 10/12 (83.3%) | 9/12 (75.0%) |
+| spatial | 12/12 (100%) | 12/12 (100%) |
+| statistics | 6/12 (50.0%) | 6/12 (50.0%) |
+| multi_table | 5/12 (41.7%) | 3/12 (25.0%) |
+| simple | 12/12 (100%) | 10/12 (83.3%) |
+| medium | 25/30 (83.3%) | 24/30 (80.0%) |
+| hard | 8/18 (44.4%) | 6/18 (33.3%) |
+
+| # | Category | Difficulty | Hold-out | Single | Multi | Delta |
+| ---: | --- | --- | :---: | ---: | ---: | ---: |
+| 1 | retrieval | simple | no | 3/3 | 3/3 | +0 |
+| 2 | retrieval | simple | yes | 3/3 | 3/3 | +0 |
+| 3 | retrieval | medium | no | 3/3 | 2/3 | -1 |
+| 4 | retrieval | simple | no | 3/3 | 2/3 | -1 |
+| 5 | temporal | medium | no | 1/3 | 2/3 | +1 |
+| 6 | temporal | medium | yes | 3/3 | 2/3 | -1 |
+| 7 | temporal | medium | no | 3/3 | 3/3 | +0 |
+| 8 | temporal | simple | no | 3/3 | 2/3 | -1 |
+| 9 | spatial | medium | no | 3/3 | 3/3 | +0 |
+| 10 | spatial | medium | no | 3/3 | 3/3 | +0 |
+| 11 | spatial | hard | yes | 3/3 | 3/3 | +0 |
+| 12 | spatial | medium | no | 3/3 | 3/3 | +0 |
+| 13 | statistics | medium | no | 3/3 | 3/3 | +0 |
+| 14 | statistics | hard | yes | 0/3 | 0/3 | +0 |
+| 15 | statistics | medium | no | 0/3 | 1/3 | +1 |
+| 16 | statistics | medium | no | 3/3 | 2/3 | -1 |
+| 17 | multi_table | hard | yes | 2/3 | 0/3 | -2 |
+| 18 | multi_table | hard | no | 0/3 | 0/3 | +0 |
+| 19 | multi_table | hard | no | 3/3 | 3/3 | +0 |
+| 20 | multi_table | hard | yes | 0/3 | 0/3 | +0 |
+
+The multi loss is not hold-out-only: hold-out is 8/18 versus 11/18, and
+non-hold-out is 32/42 versus 34/42. With this sample size the hold-out split is
+descriptive, not a generalization test.
+
+### v3 verifier audit
+
+The verifier still does most of the work, but v3 exposes three regressions that
+v2's stored flags did not:
+
+| Repeat | Pre-verify | Final | Wrong->right | Right->wrong | Right->right | Wrong->wrong | Changed |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 7/20 | 16/20 | 10 | 1 | 6 | 3 | 12 |
+| 2 | 5/20 | 11/20 | 7 | 1 | 4 | 8 | 9 |
+| 3 | 5/20 | 13/20 | 9 | 1 | 4 | 6 | 11 |
+| **Total** | **17/60** | **40/60** | **26** | **3** | **14** | **17** | **32** |
+
+The three right->wrong cases are real verifier harm, not just text quality:
+
+- `#18` repeat 1: synthesis staged the correct **4.24 m/s**; `overwrite` changed
+  it to **3.71 m/s**.
+- `#3` repeat 2: synthesis correctly refused the no-data CO question; the
+  verifier replaced that with the identical-code-block stop sentinel.
+- `#16` repeat 3: synthesis correctly said no PM2.5 reading was available; the
+  verifier replaced it with a station-ambiguity message.
+
+Six of the 20 failures had a verifier-changed answer and still failed. The
+verifier is not a reliable fallback for a missing or wrong staged value; its
+contract needs an explicit "unset `ANSWER` on invalid premise" and "never write
+a string or NaN into a numeric `ANSWER`" rule before it can be considered safe
+outside this benchmark.
+
+### v3 failure taxonomy
+
+All **20 failing case-runs** are classified below. Overlaps are possible; the
+"primary class" is the first blocker, not the only one.
+
+| Repeat | Case | Primary class | Evidence |
+| ---: | ---: | --- | --- |
+| 1 | 14 | direct AQ/weather id join + empty-frame format | Last SQL joins `a.station_id = w.station_id`; empty result; `f"{None:.2f}"` raises `TypeError`; final false no-data. |
+| 1 | 17 | stall guard + `exit()` | Station guard calls `exit()`; blocked by the sandbox; 2 stalls; stop sentinel and no answer. |
+| 1 | 18 | verifier overwrite harm | Pre-verifier value 4.24 is correct; verifier writes 3.71; follow-up SQL also has a syntax error. |
+| 1 | 20 | hallucinated table + stall | Queries nonexistent `station_type_definitions`; 1 stall; final says there are no wind-below-2 rows. |
+| 2 | 3 | verifier overwrite harm + stall | Pre-verifier refusal is correct; `exit()` is blocked; verifier writes the stop sentinel. |
+| 2 | 4 | empty AVG + `None` format + stall | Null average formatted with `:.2f` raises `TypeError`; `exit()` blocked; stop sentinel; expected invalid-station refusal. |
+| 2 | 5 | stall + wrong temperature path | Weather query uses `AVG(datetime)` instead of temperature; `exit()` blocked; sentinel; answer 3.24 versus 12.40. |
+| 2 | 8 | bind error + stale value + stall | Missing `station_id` bind; answer 15.25 for January 2026 (expected no-data/0); 1 stall. |
+| 2 | 14 | direct AQ/weather id join + stall | Same direct `station_id` join; `exit()` blocked; 1 stall; false no-data and stale 3.28. |
+| 2 | 15 | wrong grain (hourly count) | Returns 81 instead of 31; counts hourly exceedances rather than daily-average days; follow-up hits a `numpy.int64` bind error. |
+| 2 | 17 | station guard + `exit()` | Tai Po guard reports "not uniquely identified"; `exit()` blocked; 1 stall; no answer. |
+| 2 | 18 | stall + handoff/aggregation | 2 stalls; answer 15.26; stop sentinel; the correct paired wind path is not handed off. |
+| 2 | 20 | shared-timestamp filter + wrong arithmetic | Returns 41.37 versus 31.18; filters any weather station with wind below 2, not each station's paired row; final "cannot be answered". |
+| 3 | 6 | station guard + stale AQHI answer | Tung Chung guard fails; stale AQHI count list remains; missing `station_id` bind; expected 0.28. |
+| 3 | 14 | `numpy.int64` bind + false no-data | Station is resolved, but the id is a `numpy.int64`; final says no data for Causeway Bay. |
+| 3 | 15 | bind error + stale mean | Missing `station_id`; answer 15.26; final tells the user to fix the bind; expected 31 days. |
+| 3 | 16 | verifier overwrite harm | Pre-verifier no-data sentence is correct; verifier replaces it with a station-ambiguity sentence. |
+| 3 | 17 | `numpy.int64` bind + stall | Bind error; 1 stall; answer 2.95 versus 1.81; stop sentinel. |
+| 3 | 18 | stall + handoff/aggregation | `exit()` blocked; 2 stalls; answer 15.26; stop sentinel; expected 4.24. |
+| 3 | 20 | shared-timestamp filter | CTE filters every `wx_%` weather row with wind below 2; returns 32.43 versus 31.18; verifier writes the numeric. |
+
+Summary of the 20 v3 failures:
+
+- **13/20 involve weather pairing or multi-table weather questions** (`#5`,
+  `#14`, `#17`, `#18`, `#20`). The explicit prompt rule did not remove the
+  failure: `#14` still uses the direct `station_id` join in repeats 1 and 2,
+  and `#20` repeat 3 filters by any weather station instead of the paired one.
+  A prose rule is not a substitute for verifier checks or a stronger model.
+- **16/20 had at least one stall** (37 stall events total); **8** ended in the
+  identical-code stop sentinel. The guard saves budget but often replaces a
+  wrong attempt with no answer.
+- **7/20 left `ANSWER` unset**, **4/20 wrote a string or NaN into `ANSWER`**,
+  and the other 9 were wrong numeric/aggregation answers. The verifier's
+  `overwrite` rescue rate (26) is offset by three right->wrong rewrites.
+- The most damaging new evidence is `#18` repeat 1: the correct 4.24 m/s was
+  already staged, but the verifier overwrote it with 3.71 m/s. This is the
+  failure mode the verifier-mode comparison must attack.
+
+### v3 reproduce and limits
+
+```powershell
+uv run python evals/run_baseline.py --arm single --single-roles --repeats 3 \
+  --out runs/baseline/day5b_v3_budget20_3x
+uv run python evals/run_baseline.py --arm multi --repeats 3 \
+  --out runs/multi/day5b_v3_budget20_3x
+uv run python evals/compare_arms.py \
+  --single runs/baseline/day5b_v3_budget20_3x \
+  --multi runs/multi/day5b_v3_budget20_3x \
+  --scorer v2 --out runs/multi/day5b_v3_budget20_3x/compare.json
+```
+
+Resume commands if a process is killed:
+
+```powershell
+uv run python evals/run_baseline.py --arm single --single-roles --repeats 3 \
+  --resume runs/baseline/day5b_v3_budget20_3x
+uv run python evals/run_baseline.py --arm multi --repeats 3 \
+  --resume runs/multi/day5b_v3_budget20_3x
+```
+
+Limits: the v3 base prompt hash is live-context-specific; the single arm is a
+merged-role control, not the frozen reference; the result is a negative/null
+result with 20 tasks and 3 repeats; hold-out is descriptive; and the planner
+call is outside the 20-step solver budget. No v3 prompt tuning was performed
+after the result was seen. The next controlled comparison is verifier
+`flag`/`none` versus `overwrite` on the non-hold-out cases; the default remains
+`overwrite` until that comparison is recorded.

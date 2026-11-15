@@ -643,11 +643,12 @@ multi-agent arm.
 8. **The frozen v2 prompt still has a weather-join ambiguity.** The domain rule
    says “join hourly tables on `station_id`” while the pairing rule only states
    that weather codes are `'wx_<air quality station_code>'`; no worked example
-   joins the two hourly tables. This is deliberately left unchanged so the
-   baseline measures the defect. It is not evidence that a larger model would
-   fix it. A v3/Day 6 prompt must state the join explicitly and add a `wx_`
-   example; if the prompt changes, both single and multi arms must be rerun at
-   the same 20-step budget before any Day 9 comparison.
+   joins the two hourly tables. This was deliberately left unchanged so the v2
+   baseline measures the defect. The v3 prompt did state the join explicitly and
+   both arms were rerun at the same 20-step budget; the result was still
+   negative (v3 single 45/60 vs multi 40/60), and direct `station_id` joins still
+   appear. The rule is necessary for clarity but not sufficient; see the v3
+   section below and `docs/multiagent_failure_log.md`.
 
 ## Hierarchical multi-agent (Day 5)
 
@@ -658,10 +659,12 @@ response falls back to the conservative four-role checklist. Every worker gets a
 fresh chat history and the **same shared `PythonRuntime`**, so variables staged by
 one worker are visible to the next. The roles live in `domains/hk/roles.py`.
 
-The two arms use the same frozen v2 base prompt, cases, model and scorer. The
-base prompt is the byte-identical prefix of every worker system prompt; the
+The Day 5b v2 arms use the same frozen v2 base prompt, cases, model and scorer.
+The base prompt is the byte-identical prefix of every worker system prompt; the
 multi arm appends a delimited role addendum and the shared-runtime rules, while
-the single arm keeps the base prompt and its task hint. The addendum contains
+the single arm keeps the base prompt and its task hint. The v3 rerun below
+replaces the shared base prompt for both arms and adds the merged role text to
+the single arm as a fairness control. The addendum contains
 procedure only: no v2 question, truth value, station id or `wx_` worked example.
 The prompt-leakage test covers those strings too. The run command is:
 
@@ -737,6 +740,54 @@ case-runs are classified in
 weather-pairing/join cluster, 10 involved the stall guard, and the rest are stale
 or non-finite answers, wrong aggregation, or entity resolution.
 
+### Day 5b v3 prompt rerun (negative)
+
+The v2 result above is frozen. v3 changed only the shared base prompt: it states
+the explicit join `weather_station.station_code = 'wx_' ||
+air_quality_station.station_code` and the alias form. The multi role addendum
+is byte-identical to v2. The single arm uses `--single-roles`, which appends a
+delimited, procedure-only merged-role addendum, so the comparison is multi
+topology plus role procedures versus a single agent with the same base and
+procedural text. The v2 questions, truth SQL, tolerances, scorer and `ANSWER`
+contract are unchanged.
+
+| Item | Single v3 | Multi v3 |
+| --- | ---: | ---: |
+| Base prompt sha256 | `538596df...` | `538596df...` |
+| Role addendum sha256 | `2c0a50e4...` (merged) | `141925a0...` (unchanged) |
+| v2 score | **45/60 (75.0%)** | **40/60 (66.7%)** |
+| v1 / semantic | 41/60 / 45/60 | 38/60 / 40/60 |
+| Repeats | 14/16/15 | 16/11/13 |
+| Hold-out / non-hold-out | 11/18 / 34/42 | 8/18 / 32/42 |
+| Tokens / seconds | 1,015,175 / 2,680.7 | 3,184,398 / 6,466.5 |
+| Mean steps / calls | 2.70 / 162 | 11.63 / 758 |
+| Tokens per case | 16,920 | 53,073 |
+| Stalls | 0 | 37 |
+
+The multi arm is **5 case-runs lower** than the v3 single control. The
+task-level comparison is **2 wins, 6 losses, 12 ties** (wins `#5`, `#15`;
+losses `#3`, `#4`, `#6`, `#8`, `#16`, `#17`); exact McNemar **p=0.2891**, paired
+task bootstrap **-0.083**, 95% CI **[-0.183, +0.017]**. This is a negative/null
+result. The v3 explicit join did not improve the aggregate: v3 multi is 40/60
+versus v2 multi 41/60, and v3 single is 45/60 versus v2 single 46/60. `#14` and
+`#20` still fail, and `#17` is 0/3 for multi.
+
+Cost per case is **3.14x tokens, 2.41x seconds and 4.68x calls** relative to the
+v3 single control. The lower ratios versus v2's 5.21x/9.11x do **not** mean the
+multi arm got cheaper: the v3 single denominator is larger (1.73x tokens and
+3.55x seconds versus v2 single) because of the merged role text. Absolute multi
+cost is roughly unchanged (3.18M tokens, 6,466.5s, 758 calls, 37 stalls).
+
+The verifier audit is **17/60 pre -> 40/60 final**, with **26 wrong->right, 3
+right->wrong, 14 right->right, 17 wrong->wrong** and 32 changed answers. The
+three right->wrong cases are real harm: `#18` repeat 1 changed the correct 4.24
+m/s to 3.71 m/s, `#3` repeat 2 replaced a correct no-data refusal with the stall
+sentinel, and `#16` repeat 3 replaced a correct no-data sentence with a station
+ambiguity. All 20 failed case-runs are classified in
+[`docs/multiagent_failure_log.md`](docs/multiagent_failure_log.md); 13/20 still
+involve weather pairing, 16/20 hit the stall guard, and 8 ended in the stop
+sentinel.
+
 #### Day 5 preliminary 1-repeat (historical)
 
 The earlier usable 1-repeat multi run used the same frozen prompt and finished at
@@ -781,18 +832,21 @@ discarded. The weather-join failures were unchanged.
    `evals/compare_arms.py` re-scores saved artifacts rather than trusting the
    historical `pass` field. The rule was versioned and frozen before the official
    Day 5b multi run; no scorer change is allowed after that result exists.
-5. **The weather-join ambiguity is the next controlled change.** The v2 multi arm
-   uses the same frozen schema prompt as the single arm, so it cannot repair the
-   missing
+5. **The weather-join ambiguity was the next controlled change, and it did not
+   rescue the result.** The v2 multi arm uses the same frozen schema prompt as
+   the single arm, so it cannot repair the missing
    `weather_station.station_code = 'wx_' || air_quality_station.station_code`
-   rule. The v3 prompt adds that rule to the base prompt, not to a role addendum,
-   and requires rerunning both arms.
+   rule. The v3 prompt adds that rule to the base prompt (not to a role
+   addendum). Both arms were rerun, but v3 multi is 40/60 versus the v3 single
+   control's 45/60; direct id-space joins still appear. The prompt fix is not a
+   capability or verifier fix.
 6. **The single v2 reference has no merged-role addendum.** The multi arm appends
    procedure-only role text after the base prompt; the frozen single arm predates
    that contract, so the Day 5b contrast is “multi topology + role procedures”
    versus “single base prompt,” not topology alone. The v3 rerun adds the same
    procedural role text to the single arm and reruns both arms; the v2 artifact
-   is not rewritten.
+   is not rewritten. The v3 single control scores 45/60, one below the v2 single
+   reference; it is not a replacement for that frozen reference.
 
 ## Conventions
 
@@ -841,5 +895,5 @@ discarded. The weather-join failures were unchanged.
 | 3 | LLM client, runtime, security, single agent | done |
 | 4 | schema prompt, geocoder, charts, frozen v2 baseline | done |
 | 5 | coordinator, workers, verifier | implemented; official 3-repeat 41/60 vs single 46/60 (p=0.109; 5.21× tokens) — no gain |
-| 5b | matched-budget multi audit, verifier modes, v3 prompt | multi audit done; v3 rerun next |
+| 5b | matched-budget multi audit, verifier modes, v3 prompt | v3 rerun done: 40/60 multi vs 45/60 single (p=0.289) — negative; verifier-mode comparison next |
 | 6 | relevance gate, knowledge retrieval, verifier tuning | next |

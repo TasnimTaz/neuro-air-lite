@@ -452,7 +452,10 @@ regressed on `#3`, `#4`, `#16` and `#17`. The four repeat-zero single-arm cases
 
 The PDF's Day 5 acceptance condition is `multi >= single`; the multi run does
 not meet it. The plan says to fix this in Day 6, not to tune the benchmark.
-A 19-step solver sensitivity run (charging the planner) and a v3 prompt that
-states the weather join are still required before any Day 9 claim. The scorer is
+A v3 prompt that states the weather join has since been run for both arms; it
+was still negative (v3 single 45/60 vs multi 40/60, task-level p=0.2891), so the
+prompt rule did not rescue the result. A 19-step solver sensitivity run
+(charging the planner) is still required before any Day 9 claim. The scorer is
 now versioned: the historical 1-repeat was v1, and Day 5b reports both v1 and v2
 after an offline re-score. Scoring was frozen before the official 3-repeat run.
+The official v2 and v3 records are in `docs/multiagent_failure_log.md`.
