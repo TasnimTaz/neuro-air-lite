@@ -51,3 +51,28 @@ MULTI_RULES = """MULTI-AGENT SHARED-RUNTIME RULES:
 - Only synthesis_report may assign the final required output, ANSWER. The verifier may overwrite ANSWER only after an independent recomputation.
 - The verifier must use a fresh raw-database query, not the staged value, and must state any mismatch.
 """
+
+
+def merged_role_addendum() -> str:
+    """Procedure-only addendum for the single arm in the v3 fairness control.
+
+    The multi arm gives each worker the same base prompt, the shared rules and
+    one role paragraph. The merged single arm gets the union of those procedure
+    texts in one prompt; it has no coordinator, parallel workers or separate
+    verifier. Keeping this generated from the live role constants avoids drift
+    between the two arms.
+    """
+    roles = "\n\n".join(
+        f"PROCEDURE {role}:\n{prompt}" for role, prompt in ROLE_PROMPTS.items()
+    )
+    return (
+        "<merged_role_procedures>\n"
+        "You are one agent performing the following procedures yourself, in a\n"
+        "single persistent runtime. Treat every worker role below as a procedural\n"
+        "check you may perform; you do not have separate workers or a coordinator.\n\n"
+        f"{MULTI_RULES}\n\n{roles}\n"
+        "</merged_role_procedures>"
+    )
+
+
+MERGED_ROLE_ADDENDUM = merged_role_addendum()

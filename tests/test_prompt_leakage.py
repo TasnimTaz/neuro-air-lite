@@ -28,7 +28,12 @@ import re
 import pytest
 
 from core.prompts import HKT
-from domains.hk.roles import COORDINATOR_SYSTEM, MULTI_RULES, ROLE_PROMPTS
+from domains.hk.roles import (
+    COORDINATOR_SYSTEM,
+    MERGED_ROLE_ADDENDUM,
+    MULTI_RULES,
+    ROLE_PROMPTS,
+)
 from domains.hk.schema_prompt import get_system_prompt
 from evals import hk_baseline, hk_baseline_v2
 
@@ -72,6 +77,7 @@ def prompt_shingles() -> set[str]:
             COORDINATOR_SYSTEM,
             MULTI_RULES,
             *ROLE_PROMPTS.values(),
+            MERGED_ROLE_ADDENDUM,
         ]
     )
     return _shingles(prompt + "\n\n" + multi)
@@ -89,6 +95,18 @@ def test_v1_does_not_leak_into_prompt(prompt_shingles: set[str], case):
 def test_v2_does_not_leak_into_prompt(prompt_shingles: set[str], case):
     assert not (_shingles(case.question) & prompt_shingles), case.question
     assert not (_shingles(case.truth_sql) & prompt_shingles), case.truth_sql
+
+
+def test_v3_weather_join_rule_is_present_without_truth_leak():
+    now = datetime.datetime(2026, 11, 10, 12, 0, tzinfo=HKT)
+    prompt = get_system_prompt(engine=None, now=now)
+    assert (
+        "weather_station.station_code = 'wx_' || air_quality_station.station_code"
+        in prompt
+    )
+    # The rule is prose; it must not become a copied truth query.
+    for case in hk_baseline_v2.CASES:
+        assert case.truth_sql.strip() not in prompt
 
 
 def test_v2_has_the_required_shape():

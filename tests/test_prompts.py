@@ -9,6 +9,7 @@ keeps that failure from coming back.
 import pytest
 from sqlalchemy.exc import OperationalError
 
+from domains.hk.roles import MERGED_ROLE_ADDENDUM, MULTI_RULES, ROLE_PROMPTS
 from domains.hk.schema_prompt import SCHEMA, get_system_prompt, render_schema
 
 
@@ -38,6 +39,34 @@ def test_prompt_renders_without_engine():
     assert "sensitive_area" in prompt
     assert "EDUCATIONAL_INSTITUTION" in prompt
     assert "FROM sensitive_area sa, air_quality_station s" in prompt
+
+
+def test_v3_weather_join_is_explicit():
+    prompt = get_system_prompt()
+    assert (
+        "weather_station.station_code = 'wx_' || air_quality_station.station_code"
+        in prompt
+    )
+    assert "ws.station_code = 'wx_' || s.station_code" in prompt
+    assert "never use the air-quality" in prompt
+
+
+def test_merged_single_role_addendum_is_delimited_and_complete():
+    assert MERGED_ROLE_ADDENDUM.startswith("<merged_role_procedures>")
+    assert MERGED_ROLE_ADDENDUM.endswith("</merged_role_procedures>")
+    assert MULTI_RULES in MERGED_ROLE_ADDENDUM
+    for role, prompt in ROLE_PROMPTS.items():
+        assert f"PROCEDURE {role}:\n{prompt}" in MERGED_ROLE_ADDENDUM
+
+
+def test_single_system_prompt_keeps_base_as_prefix():
+    from evals.run_baseline import _single_system_prompt
+
+    base = "BYTE-IDENTICAL DOMAIN PROMPT"
+    assert _single_system_prompt(base, False) == base
+    merged = _single_system_prompt(base, True)
+    assert merged.startswith(base + "\n\n")
+    assert MERGED_ROLE_ADDENDUM in merged
 
 
 def test_prompt_includes_knowledge_base_and_tools():

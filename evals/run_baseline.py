@@ -6,6 +6,7 @@
     uv run python evals/run_baseline.py --only 3 7 12 --repeats 1
     uv run python evals/run_baseline.py --no-holdout --repeats 1
     uv run python evals/run_baseline.py --arm multi --resume runs/multi/<run>
+    uv run python evals/run_baseline.py --arm single --single-roles --repeats 3
     uv run python evals/run_baseline.py --arm multi --verifier-mode flag
 
 The default set is `evals/hk_baseline_v2.py`: 20 real-user questions, six marked
@@ -69,7 +70,12 @@ from core.llm import llm, reset_usage  # noqa: E402
 from core.orchestrator import run_pipeline  # noqa: E402
 from core.prompts import HKT  # noqa: E402
 from domains.hk.db import make_admin_engine  # noqa: E402
-from domains.hk.roles import COORDINATOR_SYSTEM, MULTI_RULES, ROLE_PROMPTS  # noqa: E402
+from domains.hk.roles import (  # noqa: E402
+    COORDINATOR_SYSTEM,
+    MERGED_ROLE_ADDENDUM,
+    MULTI_RULES,
+    ROLE_PROMPTS,
+)
 from domains.hk.schema_prompt import get_system_prompt  # noqa: E402
 from domains.hk.tools import build_runtime  # noqa: E402
 from evals.hk_baseline_v2 import ANSWER_HINT, CASES, Case  # noqa: E402
@@ -156,6 +162,13 @@ def _multi_prompts_text() -> str:
             ),
         ]
     )
+
+
+def _single_system_prompt(base: str, single_roles: bool) -> str:
+    """The single arm's full system prompt, with an optional merged-role addendum."""
+    if not single_roles:
+        return base
+    return base + "\n\n" + MERGED_ROLE_ADDENDUM
 
 
 def _normalise_text(value: Any) -> str:
@@ -313,6 +326,7 @@ async def run_case(
     synth_reserve: int = 3,
     verifier_mode: str = "overwrite",
     scorer: str = DEFAULT_SCORER,
+    single_roles: bool = False,
 ) -> dict:
     runtime = build_runtime()
     trace: list[tuple[str, object]] = []
@@ -357,10 +371,11 @@ async def run_case(
             tokens = pipeline.total_tokens
             calls = pipeline.total_calls
         else:
+            single_system = _single_system_prompt(system, single_roles)
             result = await run_worker(
                 llm=llm,
                 runtime=runtime,
-                system=system,
+                system=single_system,
                 task=case.question + ANSWER_HINT,
                 max_steps=max_steps,
                 emit=emit,
@@ -663,6 +678,9 @@ async def main_async(args) -> int:
     if args.arm not in {"single", "multi"}:
         print(f"--arm must be 'single' or 'multi', got {args.arm!r}", file=sys.stderr)
         return 2
+    if args.single_roles and args.arm != "single":
+        print("--single-roles is only valid with --arm single", file=sys.stderr)
+        return 2
     if "DB_URL_ADMIN" in os.environ:
         print("[FAIL] DB_URL_ADMIN is exported; the agent environment is not scrubbed", file=sys.stderr)
         return 1
@@ -706,6 +724,12 @@ async def main_async(args) -> int:
         prompt_sha256 = hashlib.sha256(preview.encode("utf-8")).hexdigest()
         multi_prompts = _multi_prompts_text()
         multi_prompts_sha256 = hashlib.sha256(multi_prompts.encode("utf-8")).hexdigest()
+        single_addendum = MERGED_ROLE_ADDENDUM if args.single_roles else ""
+        single_addendum_sha256 = (
+            hashlib.sha256(single_addendum.encode("utf-8")).hexdigest()
+            if args.single_roles
+            else None
+        )
         print(
             f"model: {os.environ.get('LLM_MODEL', '?')} at {os.environ.get('LLM_BASE_URL', '?')}\n"
             f"prompt: {len(preview):,} chars (~{len(preview) // 4:,} tokens), "
@@ -716,6 +740,11 @@ async def main_async(args) -> int:
                 f"multi prompts: {len(multi_prompts):,} chars, sha256={multi_prompts_sha256}\n"
                 f"budget: {args.max_steps} solver steps + 1 planner call | "
                 f"verify reserve={args.verify_reserve}, synth reserve={args.synth_reserve}"
+            )
+        elif args.single_roles:
+            print(
+                f"merged single roles: {len(single_addendum):,} chars, "
+                f"sha256={single_addendum_sha256}"
             )
         print(f"repeats: {args.repeats} | max steps: {args.max_steps} | cases: {len(selected)}")
 
@@ -731,6 +760,8 @@ async def main_async(args) -> int:
         (out_dir / "prompt.txt").write_text(preview, encoding="utf-8")
         if args.arm == "multi":
             (out_dir / "multi_prompts.txt").write_text(multi_prompts, encoding="utf-8")
+        elif args.single_roles:
+            (out_dir / "single_roles.txt").write_text(single_addendum, encoding="utf-8")
 
         meta = {
             "arm": args.arm,
@@ -743,6 +774,8 @@ async def main_async(args) -> int:
             "addendum_sha256": hashlib.sha256(
                 (multi_prompts if args.arm == "multi" else "").encode("utf-8")
             ).hexdigest(),
+            "single_roles": args.single_roles,
+            "single_addendum_sha256": single_addendum_sha256,
             "prompt_time": PROMPT_TIME.isoformat(),
             "repeats": args.repeats,
             "max_steps": args.max_steps,
@@ -762,6 +795,8 @@ async def main_async(args) -> int:
                     "model",
                     "prompt_sha256",
                     "multi_prompts_sha256",
+                    "single_roles",
+                    "single_addendum_sha256",
                     "repeats",
                     "max_steps",
                     "verify_reserve",
@@ -820,6 +855,7 @@ async def main_async(args) -> int:
                         synth_reserve=args.synth_reserve,
                         verifier_mode=args.verifier_mode,
                         scorer=args.scorer,
+                        single_roles=args.single_roles,
                     )
                 except OperationalError as error:
                     print(f"      database error: {error.orig}", file=sys.stderr)
@@ -880,6 +916,8 @@ async def main_async(args) -> int:
         "addendum_sha256": hashlib.sha256(
             (multi_prompts if args.arm == "multi" else "").encode("utf-8")
         ).hexdigest(),
+        "single_roles": args.single_roles,
+        "single_addendum_sha256": single_addendum_sha256,
         "planner_policy": "planner_call_separate_from_20_solver_steps",
         "verify_reserve": args.verify_reserve,
         "synth_reserve": args.synth_reserve,
@@ -902,12 +940,19 @@ async def main_async(args) -> int:
     print(f"CASES:    {out_dir / 'cases'}")
     if args.arm == "multi":
         print(f"MULTI:    {out_dir / 'multi_prompts.txt'}")
+    elif args.single_roles:
+        print(f"ROLES:    {out_dir / 'single_roles.txt'}")
     return 0
 
 
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--arm", choices=("single", "multi"), default="single")
+    parser.add_argument(
+        "--single-roles",
+        action="store_true",
+        help="append the merged, procedure-only multi role text to the single arm (v3 fairness control)",
+    )
     parser.add_argument("--model", default=None, help="override LLM_MODEL for this run")
     parser.add_argument(
         "--base-url",

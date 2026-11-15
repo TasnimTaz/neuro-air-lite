@@ -150,6 +150,11 @@ DOMAIN_RULES = """HONG KONG DOMAIN RULES:
 - Each `weather_station` is paired one-to-one with an `air_quality_station`: the weather `station_code`
   is `'wx_<air quality station_code>'` (e.g. `'wx_taipo'`). Weather holds temperature, humidity,
   pressure and wind; air quality holds the pollutants and AQHI.
+- To join air quality to its weather station, use the explicit code-prefix join:
+  `weather_station.station_code = 'wx_' || air_quality_station.station_code`.
+  With aliases this is `ws.station_code = 'wx_' || s.station_code`. Then join
+  `hourly_station_weather` on `weather_station.id`; never use the air-quality
+  `station_id` as a weather `station_id`.
 - Period statistics come from hourly readings: a daily mean is the mean of that day's hourly values,
   not a daily summary row. Missing hours are skipped, never treated as 0.
 - NULL means "measurement missing", never zero. `AVG(col)` and `COUNT(col)` skip NULLs; `COUNT(*)` does not.

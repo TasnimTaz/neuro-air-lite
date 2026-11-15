@@ -223,6 +223,8 @@ def _arm_summary(artifact: dict, scorer: str, path: str | Path) -> dict:
         "model": artifact.get("model"),
         "prompt_sha256": artifact.get("prompt_sha256"),
         "multi_prompts_sha256": artifact.get("multi_prompts_sha256"),
+        "single_roles": artifact.get("single_roles"),
+        "single_addendum_sha256": artifact.get("single_addendum_sha256"),
         "scorer_version": artifact.get("scorer_version"),
         "verifier_mode": artifact.get("verifier_mode"),
         "repeats": artifact.get("repeats"),
