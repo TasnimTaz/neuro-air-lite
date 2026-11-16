@@ -41,6 +41,7 @@ from core.runtime import PythonRuntime
 from domains.hk.roles import COORDINATOR_SYSTEM, MULTI_RULES, ROLE_PROMPTS
 from domains.hk.schema_prompt import get_system_prompt
 from domains.hk.tools import build_runtime
+from evals.hk_baseline_v2 import ANSWER_HINT
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
@@ -194,6 +195,7 @@ async def _run_chat(
                 shared_rules=system + "\n\n" + MULTI_RULES,
                 coordinator_system=COORDINATOR_SYSTEM,
                 query=query,
+                task_suffix=ANSWER_HINT,
                 max_total=_int_env("MAX_TOTAL_STEPS", 20),
                 verify_reserve=_int_env("VERIFY_RESERVE", 6),
                 synth_reserve=_int_env("SYNTH_RESERVE", 3),
@@ -218,7 +220,7 @@ async def _run_chat(
                 llm=llm_func,
                 runtime=runtime,
                 system=system,
-                task=query,
+                task=query + ANSWER_HINT,
                 max_steps=_int_env("MAX_TOTAL_STEPS", 20),
                 emit=emit,
             )

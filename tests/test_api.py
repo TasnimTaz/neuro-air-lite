@@ -31,6 +31,16 @@ class ScriptedLLM:
         return self.responses.pop(0)
 
 
+class RecordingLLM(ScriptedLLM):
+    def __init__(self, responses: list[str]):
+        super().__init__(responses)
+        self.messages: list[list[dict[str, str]]] = []
+
+    async def __call__(self, messages: list[dict[str, str]]) -> str:
+        self.messages.append([dict(message) for message in messages])
+        return await super().__call__(messages)
+
+
 class TrackingRuntime(PythonRuntime):
     def __init__(self) -> None:
         super().__init__(variables={"charts": EChartsConfigManager()})
@@ -120,6 +130,19 @@ def test_single_arm_is_default_and_streams_final_with_charts():
     assert final["charts"][0]["title"] == "Demo"
     assert final["charts"][0]["option"]["series"][0]["type"] == "bar"
     assert done["ok"] is True
+
+
+def test_single_arm_uses_the_same_answer_hint_as_the_evaluated_run():
+    llm = RecordingLLM(SINGLE_RESPONSES)
+    _, client = _client(llm)
+    response = client.post("/api/chat", json={"query": "demo question"})
+
+    assert response.status_code == 200
+    assert llm.messages
+    assert any(
+        "assign it to a variable named ANSWER" in message["content"]
+        for message in llm.messages[0]
+    )
 
 
 def test_multi_arm_emits_a_plan_and_runs_the_verifier():

@@ -977,8 +977,10 @@ only), `worker_start`, `worker_stall`, `code`, `output`, `agent_final`, `final`,
 `error` and `done`. The public `final` event is one object with `answer`,
 `final_text`, the accumulated ECharts configs, usage, elapsed seconds and the
 topology's step/verifier counters. The inner orchestrator's textual `final` is
-renamed `agent_final` so the two cannot be confused. A 15 s SSE comment keeps
-an idle connection alive while a model call is in flight.
+renamed `agent_final` so the two cannot be confused. Both arms receive the same
+`ANSWER_HINT` task suffix as the evaluated runs; this is task plumbing, not a
+change to the frozen base prompt. A 15 s SSE comment keeps an idle connection
+alive while a model call is in flight.
 
 Each request gets a fresh `PythonRuntime` and closes it in a `finally` block.
 The API only calls `build_runtime()`; it never reads `DB_URL_ADMIN`.
