@@ -31,6 +31,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from core.embeddings import EmbeddingClient  # noqa: E402
+from core.env import load_agent_env  # noqa: E402
 from core.gate import RelevanceGate  # noqa: E402
 
 DEFAULT_DATA = ROOT / "evals" / "gate_set.json"
@@ -187,6 +188,7 @@ def main() -> int:
     parser.add_argument("--json-out", type=Path, default=None)
     args = parser.parse_args()
 
+    load_agent_env(override=False, scrub=True)
     print("WARNING: this script makes live embedding calls. Do not run it while an eval is running.")
     items = load_items(args.data)
     train, test, report = asyncio.run(calibrate(items, seed=args.seed))
