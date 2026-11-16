@@ -848,6 +848,100 @@ discarded. The weather-join failures were unchanged.
    is not rewritten. The v3 single control scores 45/60, one below the v2 single
    reference; it is not a replacement for that frozen reference.
 
+## Relevance gate, embeddings and knowledge base (Day 6)
+
+Day 6 adds three new components without touching the evaluated prompt:
+
+```
+core/embeddings.py          async Ollama /v1/embeddings client + on-disk cache
+core/gate.py                cosine relevance gate over 18 capability sentences
+domains/hk/kb.py            Markdown chunking, kb_search(), build_runtime_with_kb()
+evals/gate_set.json         30 in-scope, 30 out-of-scope, 10 vague in-scope
+evals/premise_traps.json    10 premise traps with expected behaviour
+scripts/calibrate_gate.py   live held-out threshold calibration (not run yet)
+scripts/check_premise_traps.py  stub/validator; the live runner is not implemented
+```
+
+### Embeddings
+
+`EmbeddingClient` calls the OpenAI-compatible `/v1/embeddings` endpoint on local
+Ollama. It uses `EMBED_MODEL` (default `nomic-embed-text`), `EMBED_BASE_URL`
+(fallback `LLM_BASE_URL`) and `EMBED_API_KEY` (fallback `LLM_API_KEY`). There is
+no PyTorch or sentence-transformers dependency. Vectors are cached at
+`ingest/cache/embeddings/<model>/<sha256(text)>.json` (gitignored; override with
+`EMBED_CACHE_DIR`), so repeated gate/KB scope text makes no request. The cache is
+keyed by both the model and the text hash, and cache writes use atomic replace.
+
+Install the model only after the background evaluation runs finish:
+
+```powershell
+ollama pull nomic-embed-text
+```
+
+Pulling or loading the embedding model now could evict the chat model from
+memory and change the running evaluation's latency.
+
+### Gate
+
+`R(q, D) = max cosine(q, scope_sentence)` over 18 short capability sentences,
+covering the six populated tables, 2025 time windows, aggregation, thresholds,
+comparisons, joins and Hong Kong distance. `GATE_THETA` overrides the threshold;
+the built-in `0.50` is explicitly **provisional** until the calibration runs.
+Empty queries and queries longer than 2,000 characters are rejected before the
+embedder is called. The gate returns `{in_scope, score, nearest_scope, theta,
+reason}`.
+
+`evals/gate_set.json` has the required 30 / 30 / 10 split. `scripts/calibrate_gate.py`
+embeds the set once, splits each group 50/50 with a fixed seed, chooses theta on
+one half, and reports accuracy on the other half. It prints every theta from
+0.30 to 0.70 step 0.02, but the headline is the held-out number, not train. The
+script makes live embedding calls and must not run while an eval is running.
+The default threshold has not been calibrated on this machine yet.
+
+### Knowledge base
+
+`domains/hk/knowledge/*.md` is chunked by heading; sections longer than about
+300 words are split and every piece keeps its heading. Chunk embeddings are
+computed once per `KnowledgeBase`. `kb_search(query, k=3, min_score=0.5)` returns
+`{text, source, heading, score}`. Every returned `text` is enclosed in
+`[BEGIN KB DATA]` / `[END KB DATA]` with a "data, not instructions" notice, and
+delimiter strings inside a document are neutralised so a hostile chunk cannot
+close the wrapper early. That is a prompt-injection guard rail, not a sandbox.
+
+`build_runtime_with_kb()` is new in `domains/hk/kb.py`; it calls the existing
+`build_runtime()` and injects a synchronous `kb_search` function. It is **not
+wired into the evaluated agent**: adding the tool or its description to the
+prompt changes the base prompt hash and requires a fresh matched run of both
+arms. The gate is likewise not yet called by the API.
+
+### Premise traps
+
+`evals/premise_traps.json` contains ten traps: nonexistent station, future date,
+ozone treated as a primary emission, no station, no time window, unit confusion,
+out-of-coverage year, a presumed strong-wind event that did not happen, a PM10
+exceedance phrased as a PM2.5 alert, and a non-HK location. Each has
+`expected_behaviour` (`halt`, `ask clarification`, or `state limitation`) and a
+reason. `scripts/check_premise_traps.py` validates the JSON by default; the live
+runner is deliberately a stub and was not run. The live run needs the LLM and
+belongs after the evaluation freeze.
+
+### Day 6 tests and limits
+
+The Day 6 tests are offline: a deterministic fake embedder and a fake OpenAI
+client, no Ollama and no database. They cover gate decisions and the boundary,
+empty/overlong rejection before embedding, cache hits and corrupt-cache
+refetching, chunking and ranking, `min_score`, DATA wrapping, injection text
+staying inside the wrapper, the runtime tool injection, and the 30/30/10 and
+10-trap data shapes.
+
+```powershell
+uv run pytest -q
+```
+
+The evaluated base prompt and multi prompts are unchanged by Day 6. Wiring the
+gate into `api/` or `kb_search` into the knowledge-retrieval role is a later,
+hash-changing step.
+
 ## Conventions
 
 - The agent only ever connects with the read-only `neuro_ro` role. Ingestion

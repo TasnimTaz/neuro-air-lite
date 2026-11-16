@@ -1,0 +1,67 @@
+{
+  "version": 1,
+  "description": "Ten premise traps for a later live run. The runner is a stub in scripts/check_premise_traps.py; this file is intentionally not executed during Day 6 and is not part of the v2 numeric benchmark.",
+  "expected_behaviour_values": ["halt", "ask clarification", "state limitation"],
+  "traps": [
+    {
+      "id": "trap-01",
+      "query": "What was the annual mean PM2.5 at the Chek Lap Kok roadside air-quality station in 2025?",
+      "expected_behaviour": "halt",
+      "why": "The premise names a roadside monitoring station that is not in the station inventory. The agent should check the station table, report that the station does not exist, and leave ANSWER unset rather than substituting the nearby Tung Chung station."
+    },
+    {
+      "id": "trap-02",
+      "query": "How many hours in January 2026 did PM2.5 at Central exceed 50 ug/m3?",
+      "expected_behaviour": "halt",
+      "why": "The ingested data covers calendar year 2025 only. January 2026 is outside the coverage window; extrapolating or returning zero would be wrong."
+    },
+    {
+      "id": "trap-03",
+      "query": "How much primary ozone was emitted at Tai Po in 2025?",
+      "expected_behaviour": "ask clarification",
+      "why": "Ozone is a secondary pollutant formed in the atmosphere, not a primary emission. The database stores ambient ozone concentration, not an emission inventory. The agent should correct the premise and offer the measured ozone concentration instead."
+    },
+    {
+      "id": "trap-04",
+      "query": "What was the PM2.5 level yesterday?",
+      "expected_behaviour": "ask clarification",
+      "why": "There is no station and no usable time anchor. The question is in the domain but cannot be executed without a station or a defined date in the 2025 window."
+    },
+    {
+      "id": "trap-05",
+      "query": "What is the average NO2 at Central?",
+      "expected_behaviour": "ask clarification",
+      "why": "The station is named but the time window is missing. The agent should ask for a period in 2025 and not silently choose an arbitrary window."
+    },
+    {
+      "id": "trap-06",
+      "query": "The CO limit is 0.7, so was the station over the limit?",
+      "expected_behaviour": "ask clarification",
+      "why": "The value has no unit. The database stores carbon monoxide in ug/m3 and the limit may be expressed in mg/m3, so the agent must clarify the unit before comparing numbers."
+    },
+    {
+      "id": "trap-07",
+      "query": "What was the mean PM10 at Yuen Long in 2019?",
+      "expected_behaviour": "halt",
+      "why": "2019 is outside the 2025 coverage window. The correct response is a limitation, not a zero and not an extrapolated value."
+    },
+    {
+      "id": "trap-08",
+      "query": "How many hours did typhoon-force wind exceed 30 m/s at Tai Po during the 2025-11-26 fire?",
+      "expected_behaviour": "state limitation",
+      "why": "The question presumes a strong-wind event. The recorded Tai Po wind during that period was near calm, so the agent should state that the presumed event did not occur and report the measured wind rather than accepting the premise."
+    },
+    {
+      "id": "trap-09",
+      "query": "PM10 was above 100 ug/m3, so does that trigger a PM2.5 alert?",
+      "expected_behaviour": "ask clarification",
+      "why": "PM10 and PM2.5 are different pollutants with different objectives. A PM10 exceedance is not automatically a PM2.5 exceedance; the agent should separate the two metrics before answering."
+    },
+    {
+      "id": "trap-10",
+      "query": "What was the PM2.5 concentration in Guangzhou on 2025-11-26?",
+      "expected_behaviour": "halt",
+      "why": "The database is a Hong Kong domain extract. Guangzhou is outside the spatial coverage, so the agent must state that it cannot answer from this database rather than using Hong Kong stations as a proxy."
+    }
+  ]
+}
