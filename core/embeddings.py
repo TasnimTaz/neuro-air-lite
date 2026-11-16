@@ -8,16 +8,23 @@ so the same local process that serves the chat model can serve embeddings:
     # EMBED_MODEL defaults to nomic-embed-text; EMBED_BASE_URL falls back to
     # LLM_BASE_URL, then http://127.0.0.1:11434/v1.
 
-Embeddings are cached on disk by ``(model, sha256(text))``. The cache lives
-under ``ingest/cache/embeddings`` by default (gitignored), and the location can
-be overridden with ``EMBED_CACHE_DIR``. A cache hit makes no network request,
-which matters for the relevance gate and the knowledge base because their scope
-text does not change between runs.
+Embeddings are cached on disk by ``(model, prefix, sha256(prefix + text))``. The
+cache lives under ``ingest/cache/embeddings`` by default (gitignored), and the
+location can be overridden with ``EMBED_CACHE_DIR``. A cache hit makes no
+network request, which matters for the relevance gate and the knowledge base
+because their scope text does not change between runs.
+
+``nomic-embed-text`` is an asymmetric model: retrieval queries must use
+``search_query: `` and indexed documents must use ``search_document: ``. The
+prefixes are read from ``EMBED_QUERY_PREFIX`` and ``EMBED_DOC_PREFIX``; the
+defaults are the nomic strings. They are part of the cache key, so a query and a
+document with the same raw text cannot collide. Calibration and the runtime use
+the same two methods, ``embed_query`` and ``embed_documents``.
 
 The embedder is injectable: tests pass a deterministic fake client instead of
-contacting Ollama. The public ``embed`` function is async; a caller that needs a
-synchronous result must drive it on an event loop (the knowledge-base wrapper in
-``domains.hk.kb`` does that for the runtime tool).
+contacting Ollama. The public functions are async; a caller that needs a
+synchronous result must drive them on an event loop (the knowledge-base wrapper
+in ``domains.hk.kb`` does that for the runtime tool).
 """
 
 from __future__ import annotations
@@ -38,6 +45,8 @@ DEFAULT_MODEL = "nomic-embed-text"
 DEFAULT_BASE_URL = "http://127.0.0.1:11434/v1"
 DEFAULT_CACHE_DIR = ROOT / "ingest" / "cache" / "embeddings"
 DEFAULT_BATCH_SIZE = 64
+DEFAULT_QUERY_PREFIX = "search_query: "
+DEFAULT_DOC_PREFIX = "search_document: "
 
 # A fake embedder implements this shape: texts -> one vector per text.
 Embedder = Callable[[Sequence[str]], Awaitable[Sequence[Sequence[float]]]]
@@ -59,8 +68,20 @@ def cache_dir_path(path: str | Path | None = None) -> Path:
     return Path(os.environ.get("EMBED_CACHE_DIR", str(DEFAULT_CACHE_DIR))).expanduser()
 
 
+def query_prefix_setting() -> str:
+    """Return the retrieval-query prefix, including an explicitly empty one."""
+    raw = os.environ.get("EMBED_QUERY_PREFIX")
+    return DEFAULT_QUERY_PREFIX if raw is None else raw
+
+
+def doc_prefix_setting() -> str:
+    """Return the indexed-document prefix, including an explicitly empty one."""
+    raw = os.environ.get("EMBED_DOC_PREFIX")
+    return DEFAULT_DOC_PREFIX if raw is None else raw
+
+
 def text_sha256(text: str) -> str:
-    """Return the cache key component for one input text."""
+    """Return the SHA-256 used as the cache filename component."""
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
@@ -109,6 +130,10 @@ class EmbeddingClient:
             then ``ollama``.
         cache_dir: Cache root. Defaults to ``EMBED_CACHE_DIR`` or
             ``ingest/cache/embeddings``.
+        query_prefix: Prefix for ``embed_query``. Defaults to
+            ``EMBED_QUERY_PREFIX`` or ``search_query: ``.
+        doc_prefix: Prefix for ``embed_documents``. Defaults to
+            ``EMBED_DOC_PREFIX`` or ``search_document: ``.
         client: Optional already-constructed client-like object exposing
             ``embeddings.create``. Tests use this to avoid the network.
         use_cache: Set false to bypass reads and writes (diagnostics only).
@@ -121,12 +146,20 @@ class EmbeddingClient:
         base_url: str | None = None,
         api_key: str | None = None,
         cache_dir: str | Path | None = None,
+        query_prefix: str | None = None,
+        doc_prefix: str | None = None,
         client: Any | None = None,
         timeout: float = 60.0,
         use_cache: bool = True,
     ) -> None:
         self.model = model_name(model)
         self.cache_root = cache_dir_path(cache_dir)
+        self.query_prefix = (
+            query_prefix if query_prefix is not None else query_prefix_setting()
+        )
+        self.doc_prefix = (
+            doc_prefix if doc_prefix is not None else doc_prefix_setting()
+        )
         self.use_cache = use_cache
         self._client = client
         if self._client is None:
@@ -146,12 +179,13 @@ class EmbeddingClient:
                 timeout=timeout,
             )
 
-    def cache_path(self, text: str) -> Path:
-        """Return the cache file for one ``(model, text)`` pair."""
-        return self.cache_root / _model_slug(self.model) / f"{text_sha256(text)}.json"
+    def cache_path(self, text: str, *, prefix: str = "") -> Path:
+        """Return the cache file for one ``(model, prefix, text)`` input."""
+        key = text_sha256(prefix + text)
+        return self.cache_root / _model_slug(self.model) / f"{key}.json"
 
-    def _read_cache(self, text: str) -> list[float] | None:
-        path = self.cache_path(text)
+    def _read_cache(self, text: str, *, prefix: str = "") -> list[float] | None:
+        path = self.cache_path(text, prefix=prefix)
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError, TypeError):
@@ -160,7 +194,11 @@ class EmbeddingClient:
             return None
         if payload.get("model") != self.model:
             return None
-        if payload.get("text_sha256") != text_sha256(text):
+        # Older unprefixed entries have no ``prefix`` field, so the default
+        # empty string keeps them readable; any prefixed input gets a new key.
+        if payload.get("prefix", "") != prefix:
+            return None
+        if payload.get("text_sha256") != text_sha256(prefix + text):
             return None
         vector = payload.get("embedding")
         if not isinstance(vector, list) or not vector:
@@ -170,14 +208,17 @@ class EmbeddingClient:
         except (TypeError, ValueError):
             return None
 
-    def _write_cache(self, text: str, vector: Sequence[float]) -> None:
+    def _write_cache(
+        self, text: str, vector: Sequence[float], *, prefix: str = ""
+    ) -> None:
         if not self.use_cache:
             return
-        path = self.cache_path(text)
+        path = self.cache_path(text, prefix=prefix)
         path.parent.mkdir(parents=True, exist_ok=True)
         payload = {
             "model": self.model,
-            "text_sha256": text_sha256(text),
+            "prefix": prefix,
+            "text_sha256": text_sha256(prefix + text),
             "embedding": [float(value) for value in vector],
         }
         # Atomic replace: a killed process leaves either the old file or the new
@@ -228,19 +269,26 @@ class EmbeddingClient:
             raise EmbeddingError("embedding response did not cover every input")
         return [vector for vector in ordered if vector is not None]
 
-    async def embed(self, texts: Sequence[str]) -> list[list[float]]:
-        """Embed texts, using the cache for texts already seen with this model."""
+    async def embed(
+        self, texts: Sequence[str], *, prefix: str = ""
+    ) -> list[list[float]]:
+        """Embed raw texts with an explicit prefix and the on-disk cache.
+
+        ``prefix`` is part of the cache key and is prepended before the request.
+        Use ``embed_query`` or ``embed_documents`` rather than calling this
+        directly for retrieval; the explicit method documents the input side.
+        """
         items = [str(text) for text in texts]
         if not items:
             return []
 
-        keys = [text_sha256(text) for text in items]
+        keys = [text_sha256(prefix + text) for text in items]
         by_key: dict[str, list[float]] = {}
         missing: dict[str, str] = {}
         for text, key in zip(items, keys):
             if key in by_key or key in missing:
                 continue
-            cached = self._read_cache(text) if self.use_cache else None
+            cached = self._read_cache(text, prefix=prefix) if self.use_cache else None
             if cached is not None:
                 by_key[key] = cached
             else:
@@ -249,12 +297,20 @@ class EmbeddingClient:
         pending = list(missing.items())
         for start in range(0, len(pending), DEFAULT_BATCH_SIZE):
             batch = pending[start : start + DEFAULT_BATCH_SIZE]
-            vectors = await self._request([text for _, text in batch])
+            vectors = await self._request([prefix + text for _, text in batch])
             for (key, text), vector in zip(batch, vectors):
                 by_key[key] = vector
-                self._write_cache(text, vector)
+                self._write_cache(text, vector, prefix=prefix)
 
         return [list(by_key[key]) for key in keys]
+
+    async def embed_query(self, texts: Sequence[str]) -> list[list[float]]:
+        """Embed retrieval queries with ``EMBED_QUERY_PREFIX``."""
+        return await self.embed(texts, prefix=self.query_prefix)
+
+    async def embed_documents(self, texts: Sequence[str]) -> list[list[float]]:
+        """Embed indexed documents with ``EMBED_DOC_PREFIX``."""
+        return await self.embed(texts, prefix=self.doc_prefix)
 
 
 _default_client: EmbeddingClient | None = None
@@ -269,5 +325,15 @@ def get_default_client() -> EmbeddingClient:
 
 
 async def embed(texts: Sequence[str]) -> list[list[float]]:
-    """Embed texts with the default local Ollama client and on-disk cache."""
+    """Embed raw texts with no task prefix (compatibility/diagnostics only)."""
     return await get_default_client().embed(texts)
+
+
+async def embed_query(texts: Sequence[str]) -> list[list[float]]:
+    """Embed retrieval queries with the configured query prefix."""
+    return await get_default_client().embed_query(texts)
+
+
+async def embed_documents(texts: Sequence[str]) -> list[list[float]]:
+    """Embed indexed documents with the configured document prefix."""
+    return await get_default_client().embed_documents(texts)

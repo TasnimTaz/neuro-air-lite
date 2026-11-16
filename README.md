@@ -868,9 +868,17 @@ scripts/check_premise_traps.py  stub/validator; the live runner is not implement
 Ollama. It uses `EMBED_MODEL` (default `nomic-embed-text`), `EMBED_BASE_URL`
 (fallback `LLM_BASE_URL`) and `EMBED_API_KEY` (fallback `LLM_API_KEY`). There is
 no PyTorch or sentence-transformers dependency. Vectors are cached at
-`ingest/cache/embeddings/<model>/<sha256(text)>.json` (gitignored; override with
-`EMBED_CACHE_DIR`), so repeated gate/KB scope text makes no request. The cache is
-keyed by both the model and the text hash, and cache writes use atomic replace.
+`ingest/cache/embeddings/<model>/<sha256(prefix + text)>.json` (gitignored;
+override with `EMBED_CACHE_DIR`), so repeated gate/KB scope text makes no
+request. The cache key includes the model, the task prefix and the text, and
+cache writes use atomic replace.
+
+`nomic-embed-text` is asymmetric, so retrieval queries and indexed documents use
+different prefixes: `EMBED_QUERY_PREFIX` defaults to `search_query: ` and
+`EMBED_DOC_PREFIX` defaults to `search_document: `. The trailing space is part
+of the prefix and of the cache key. Calibration and runtime both call the same
+`embed_query` / `embed_documents` methods; set either variable to an empty
+quoted string for a symmetric embedding model.
 
 Install the model only after the background evaluation runs finish:
 
@@ -894,9 +902,13 @@ reason}`.
 `evals/gate_set.json` has the required 30 / 30 / 10 split. `scripts/calibrate_gate.py`
 embeds the set once, splits each group 50/50 with a fixed seed, chooses theta on
 one half, and reports accuracy on the other half. It prints every theta from
-0.30 to 0.70 step 0.02, but the headline is the held-out number, not train. The
-script makes live embedding calls and must not run while an eval is running.
-The default threshold has not been calibrated on this machine yet.
+0.30 to 0.70 step 0.02, but the headline is the held-out number, not train. It
+also lists every held-out out-of-scope query that leaks through at the selected
+theta, with its score. Those are expected topic-gate false positives: the gate
+decides whether a question is about the domain, not whether its premise is true
+or the data can answer it. The script makes live embedding calls and must not run
+while an eval is running. The default threshold has not been calibrated on this
+machine yet.
 
 ### Knowledge base
 
@@ -929,10 +941,10 @@ belongs after the evaluation freeze.
 
 The Day 6 tests are offline: a deterministic fake embedder and a fake OpenAI
 client, no Ollama and no database. They cover gate decisions and the boundary,
-empty/overlong rejection before embedding, cache hits and corrupt-cache
-refetching, chunking and ranking, `min_score`, DATA wrapping, injection text
-staying inside the wrapper, the runtime tool injection, and the 30/30/10 and
-10-trap data shapes.
+empty/overlong rejection before embedding, query/document prefix separation in
+the cache, cache hits and corrupt-cache refetching, chunking and ranking,
+`min_score`, DATA wrapping, injection text staying inside the wrapper, the
+runtime tool injection, and the 30/30/10 and 10-trap data shapes.
 
 ```powershell
 uv run pytest -q

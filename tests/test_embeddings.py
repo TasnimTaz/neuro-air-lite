@@ -106,6 +106,48 @@ def test_model_comes_from_environment(monkeypatch, tmp_path):
     assert client.model == "env-embed-model"
 
 
+def test_prefixes_default_to_nomic_and_honour_empty_environment(monkeypatch, tmp_path):
+    monkeypatch.delenv("EMBED_QUERY_PREFIX", raising=False)
+    monkeypatch.delenv("EMBED_DOC_PREFIX", raising=False)
+    default = EmbeddingClient(cache_dir=tmp_path, client=FakeClient())
+    assert default.query_prefix == "search_query: "
+    assert default.doc_prefix == "search_document: "
+
+    monkeypatch.setenv("EMBED_QUERY_PREFIX", "")
+    monkeypatch.setenv("EMBED_DOC_PREFIX", "")
+    empty = EmbeddingClient(cache_dir=tmp_path, client=FakeClient())
+    assert empty.query_prefix == ""
+    assert empty.doc_prefix == ""
+
+
+async def test_query_and_document_prefixes_are_separate_cache_entries(tmp_path):
+    fake = FakeClient()
+    client = EmbeddingClient(
+        model="test-model",
+        cache_dir=tmp_path,
+        query_prefix="Q: ",
+        doc_prefix="DOC: ",
+        client=fake,
+    )
+
+    query_vector = await client.embed_query(["alpha"])
+    document_vector = await client.embed_documents(["alpha"])
+
+    assert fake.embeddings.calls == [
+        ("test-model", ["Q: alpha"]),
+        ("test-model", ["DOC: alpha"]),
+    ]
+    assert query_vector != document_vector
+    assert client.cache_path("alpha", prefix="Q: ") != client.cache_path(
+        "alpha", prefix="DOC: "
+    )
+    assert client.cache_path("alpha", prefix="Q: ").is_file()
+
+    assert await client.embed_query(["alpha"]) == query_vector
+    assert await client.embed_documents(["alpha"]) == document_vector
+    assert len(fake.embeddings.calls) == 2
+
+
 def test_cosine_handles_orthogonal_and_zero_vectors():
     assert cosine([1.0, 0.0], [0.0, 1.0]) == pytest.approx(0.0)
     assert cosine([0.0, 0.0], [1.0, 1.0]) == pytest.approx(0.0)

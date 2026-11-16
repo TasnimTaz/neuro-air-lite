@@ -99,6 +99,32 @@ async def test_score_many_reuses_scope_embeddings_and_rejects_invalid():
     assert calls[1] == ["one", "two"]
 
 
+async def test_gate_uses_separate_document_and_query_embedders():
+    document_calls: list[list[str]] = []
+    query_calls: list[list[str]] = []
+
+    async def documents(texts):
+        document_calls.append(list(texts))
+        return [[1.0, 0.0] for _ in texts]
+
+    async def queries(texts):
+        query_calls.append(list(texts))
+        return [[1.0, 0.0] for _ in texts]
+
+    gate = RelevanceGate(
+        scope=["scope document"],
+        theta=0.5,
+        embedder=queries,
+        doc_embedder=documents,
+    )
+
+    decision = await gate.decide("scope query")
+
+    assert decision["in_scope"] is True
+    assert document_calls == [["scope document"]]
+    assert query_calls == [["scope query"]]
+
+
 def test_theta_comes_from_environment(monkeypatch):
     monkeypatch.setenv("GATE_THETA", "0.63")
     gate = RelevanceGate(scope=["s"], embedder=lambda texts: None)  # type: ignore[arg-type]

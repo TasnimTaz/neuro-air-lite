@@ -2,7 +2,7 @@
 
 The gate is a deliberately simple retrieval check:
 
-    R(q, D) = max cosine(embed(q), embed(sentence)) over the scope sentences D
+    R(q, D) = max cosine(embed_query(q), embed_documents(sentence))
 
 If the best cosine is at least ``GATE_THETA`` the query is in scope. This is a
 capability gate, not a fact checker: it says whether the question belongs to the
@@ -25,7 +25,7 @@ from __future__ import annotations
 import os
 from typing import Sequence
 
-from core.embeddings import Embedder, cosine, embed
+from core.embeddings import Embedder, cosine, embed_documents, embed_query
 
 MAX_QUERY_CHARS = 2000
 # Provisional pre-calibration value. Replace from the held-out calibration.
@@ -78,8 +78,11 @@ class RelevanceGate:
     Args:
         scope: Optional replacement scope (tests use a toy set).
         theta: Optional threshold; otherwise ``GATE_THETA``/``DEFAULT_THETA``.
-        embedder: Async callable ``texts -> vectors``. Defaults to
-            ``core.embeddings.embed``. Tests inject a fake.
+        embedder: Async callable for retrieval queries. Defaults to
+            ``core.embeddings.embed_query``. Tests inject a fake.
+        doc_embedder: Async callable for the scope sentences. Defaults to
+            ``core.embeddings.embed_documents``, or ``embedder`` when a fake is
+            supplied for tests. Production passes both from one client.
     """
 
     def __init__(
@@ -88,14 +91,19 @@ class RelevanceGate:
         scope: Sequence[str] | None = None,
         theta: float | None = None,
         embedder: Embedder | None = None,
+        doc_embedder: Embedder | None = None,
     ) -> None:
         self.scope = tuple(scope or SCOPE)
         self.theta = _theta(theta)
-        self._embedder = embedder or embed
+        self._query_embedder = embedder or embed_query
+        self._doc_embedder = doc_embedder or embedder or embed_documents
         self._scope_vectors: list[list[float]] | None = None
 
-    async def _vectors(self, texts: Sequence[str]) -> list[list[float]]:
-        vectors = await self._embedder(list(texts))
+    async def _vectors(
+        self, texts: Sequence[str], *, documents: bool = False
+    ) -> list[list[float]]:
+        embedder = self._doc_embedder if documents else self._query_embedder
+        vectors = await embedder(list(texts))
         if len(vectors) != len(texts):
             raise ValueError(
                 f"embedder returned {len(vectors)} vectors for {len(texts)} texts"
@@ -106,7 +114,7 @@ class RelevanceGate:
         if self._scope_vectors is None:
             if not self.scope:
                 raise ValueError("relevance gate needs at least one scope sentence")
-            self._scope_vectors = await self._vectors(self.scope)
+            self._scope_vectors = await self._vectors(self.scope, documents=True)
             width = len(self._scope_vectors[0])
             if any(len(vector) != width for vector in self._scope_vectors):
                 raise ValueError("scope embeddings have inconsistent dimensions")

@@ -127,12 +127,31 @@ def confusion(items: Sequence[ScoredItem], theta: float) -> dict[str, int]:
     return counts
 
 
+def out_of_scope_leaks(
+    items: Sequence[ScoredItem], theta: float
+) -> list[dict[str, object]]:
+    """List out-of-scope queries that the topic gate admits at ``theta``."""
+    return [
+        {
+            "id": item.item.id,
+            "group": item.item.group,
+            "query": item.item.query,
+            "score": round(item.score, 6),
+        }
+        for item in items
+        if item.item.label == 0 and item.score >= theta
+    ]
+
+
 async def calibrate(
     items: Sequence[GateItem], *, seed: int = 0
 ) -> tuple[list[ScoredItem], list[ScoredItem], dict[str, object]]:
     """Embed every query once, split, and select theta on the train half."""
     client = EmbeddingClient()
-    gate = RelevanceGate(embedder=client.embed)
+    gate = RelevanceGate(
+        embedder=client.embed_query,
+        doc_embedder=client.embed_documents,
+    )
     scores = await gate.score_many([item.query for item in items])
     scored = [ScoredItem(item=item, score=score) for item, score in zip(items, scores)]
     by_id = {item.item.id: item for item in scored}
@@ -145,12 +164,16 @@ async def calibrate(
     test_accuracy = accuracy(test, selected)
     report = {
         "model": client.model,
+        "query_prefix": client.query_prefix,
+        "doc_prefix": client.doc_prefix,
         "seed": seed,
         "theta": selected,
         "train_accuracy": round(train_accuracy, 4),
         "heldout_accuracy": round(test_accuracy, 4),
         "train_counts": confusion(train, selected),
         "heldout_counts": confusion(test, selected),
+        "train_leaks": out_of_scope_leaks(train, selected),
+        "heldout_leaks": out_of_scope_leaks(test, selected),
         "train_n": len(train),
         "heldout_n": len(test),
     }
@@ -181,6 +204,23 @@ def main() -> int:
     print(f"train counts (selection only): {report['train_counts']}")
     print(f"held-out counts: {report['heldout_counts']}")
     print(f"embedding model: {report['model']}")
+    print(
+        "embedding prefixes: "
+        f"query={report['query_prefix']!r} document={report['doc_prefix']!r}"
+    )
+    leaks = report["heldout_leaks"]
+    print(f"held-out out-of-scope leaks ({len(leaks)}):")
+    for leak in leaks:
+        print(
+            f"  {leak['id']}: score={leak['score']:.3f} group={leak['group']} "
+            f"query={leak['query']!r}"
+        )
+    if leaks:
+        print(
+            "  Note: these are topic-gate false positives. A topic gate is not a "
+            "capability or premise checker; capability failures belong in the "
+            "premise-trap evaluation."
+        )
 
     if args.json_out:
         args.json_out.parent.mkdir(parents=True, exist_ok=True)

@@ -134,6 +134,31 @@ def test_build_runtime_with_kb_injects_a_synchronous_tool(tmp_path, monkeypatch)
     assert str(result[0]["text"]).startswith(DATA_BEGIN)
 
 
+async def test_kb_uses_separate_document_and_query_embedders(tmp_path):
+    (tmp_path / "guide.md").write_text("# Air quality\n\nPM2.5 notes.\n", encoding="utf-8")
+    document_calls: list[list[str]] = []
+    query_calls: list[list[str]] = []
+
+    async def documents(texts):
+        document_calls.append(list(texts))
+        return [[1.0, 0.0] for _ in texts]
+
+    async def queries(texts):
+        query_calls.append(list(texts))
+        return [[1.0, 0.0] for _ in texts]
+
+    kb = KnowledgeBase(
+        tmp_path,
+        embedder=documents,
+        query_embedder=queries,
+    )
+    results = await kb.search_async("PM2.5", k=1, min_score=0.5)
+
+    assert len(results) == 1
+    assert document_calls and document_calls[0]
+    assert query_calls == [["PM2.5"]]
+
+
 def test_default_knowledge_directory_is_not_empty():
     chunks = load_chunks(KNOWLEDGE_DIR)
     assert chunks

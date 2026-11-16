@@ -27,7 +27,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence
 
-from core.embeddings import Embedder, EmbeddingClient, cosine, embed
+from core.embeddings import (
+    Embedder,
+    EmbeddingClient,
+    cosine,
+    embed_documents,
+    embed_query,
+)
 from core.runtime import PythonRuntime
 from domains.hk.tools import build_runtime
 
@@ -162,10 +168,14 @@ class KnowledgeBase:
         directory: str | Path = KNOWLEDGE_DIR,
         *,
         embedder: Embedder | None = None,
+        query_embedder: Embedder | None = None,
         max_words: int = MAX_CHUNK_WORDS,
     ) -> None:
         self.directory = Path(directory)
-        self._embedder = embedder or embed
+        # ``embedder`` remains the shared override used by tests. Production
+        # passes asymmetric document/query methods from one client.
+        self._doc_embedder = embedder or embed_documents
+        self._query_embedder = query_embedder or embedder or embed_query
         self._max_words = max_words
         self._chunks: list[Chunk] | None = None
         self._vectors: list[list[float]] | None = None
@@ -185,7 +195,7 @@ class KnowledgeBase:
         if not chunks:
             self._vectors = []
             return self
-        vectors = await self._embedder([chunk.text for chunk in chunks])
+        vectors = await self._doc_embedder([chunk.text for chunk in chunks])
         if len(vectors) != len(chunks):
             raise ValueError(
                 f"embedder returned {len(vectors)} vectors for {len(chunks)} chunks"
@@ -212,7 +222,7 @@ class KnowledgeBase:
         if not self._chunks or not self._vectors:
             return []
 
-        query_vector = (await self._embedder([text]))[0]
+        query_vector = (await self._query_embedder([text]))[0]
         scored: list[tuple[float, Chunk]] = []
         for chunk, vector in zip(self._chunks, self._vectors):
             score = cosine(query_vector, vector)
@@ -265,6 +275,7 @@ def build_runtime_with_kb(
     statement_timeout_ms: int | None = None,
     knowledge_dir: str | Path = KNOWLEDGE_DIR,
     embedder: Embedder | None = None,
+    query_embedder: Embedder | None = None,
     default_k: int = 3,
     min_score: float = DEFAULT_MIN_SCORE,
 ) -> PythonRuntime:
@@ -276,10 +287,20 @@ def build_runtime_with_kb(
     """
     runtime = build_runtime(statement_timeout_ms=statement_timeout_ms)
     # Give this runtime its own client so a long-lived process does not share an
-    # async HTTP client across unrelated event loops.
+    # async HTTP client across unrelated event loops. A test that injects only
+    # one fake uses it for both sides so no real request can escape.
+    if embedder is None and query_embedder is None:
+        client = EmbeddingClient()
+        embedder = client.embed_documents
+        query_embedder = client.embed_query
+    elif embedder is None:
+        embedder = query_embedder
+    elif query_embedder is None:
+        query_embedder = embedder
     kb = KnowledgeBase(
         knowledge_dir,
-        embedder=embedder or EmbeddingClient().embed,
+        embedder=embedder,
+        query_embedder=query_embedder,
     )
 
     def search_tool(
