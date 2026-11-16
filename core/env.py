@@ -46,7 +46,9 @@ AGENT_EXACT_KEYS = frozenset(
         "VERIFY_RESERVE",
     }
 )
-AGENT_KEY_PREFIXES = ("LLM_",)
+# The embedding client is agent-side too; its model, endpoint and task prefixes
+# must survive the same scrub that protects the admin DSN.
+AGENT_KEY_PREFIXES = ("LLM_", "EMBED_")
 
 # Never imported into an agent process. Scrubbed rather than merely not loaded.
 ADMIN_ONLY_KEYS = frozenset(

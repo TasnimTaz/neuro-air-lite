@@ -859,7 +859,7 @@ domains/hk/kb.py            Markdown chunking, kb_search(), build_runtime_with_k
 evals/gate_set.json         30 in-scope, 30 out-of-scope, 10 vague in-scope
 evals/premise_traps.json    10 premise traps with expected behaviour
 scripts/calibrate_gate.py   live held-out threshold calibration (not run yet)
-scripts/check_premise_traps.py  stub/validator; the live runner is not implemented
+scripts/check_premise_traps.py  validator and live single-agent trap runner
 ```
 
 ### Embeddings
@@ -933,9 +933,11 @@ ozone treated as a primary emission, no station, no time window, unit confusion,
 out-of-coverage year, a presumed strong-wind event that did not happen, a PM10
 exceedance phrased as a PM2.5 alert, and a non-HK location. Each has
 `expected_behaviour` (`halt`, `ask clarification`, or `state limitation`) and a
-reason. `scripts/check_premise_traps.py` validates the JSON by default; the live
-runner is deliberately a stub and was not run. The live run needs the LLM and
-belongs after the evaluation freeze.
+reason. `scripts/check_premise_traps.py` validates the JSON by default. `--live`
+runs each trap once through the frozen single-agent loop (or `--arm multi`),
+writes one JSON per trap plus a run artifact, and records the final text and
+`ANSWER` for qualitative review against the expected behaviour. The live run
+needs Ollama and the database, and belongs after the evaluation freeze.
 
 ### Day 6 tests and limits
 

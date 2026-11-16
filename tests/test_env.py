@@ -61,6 +61,33 @@ def test_admin_url_reads_the_admin_file_not_the_repo_dotenv(monkeypatch, tmp_pat
     assert admin_url() == "postgresql+psycopg2://admin:secret@127.0.0.1:5432/airdb"
 
 
+def test_load_agent_env_exports_embedding_settings(monkeypatch):
+    monkeypatch.setattr(
+        env_module,
+        "_file_values",
+        lambda: {
+            "EMBED_MODEL": "nomic-embed-text",
+            "EMBED_QUERY_PREFIX": "query: ",
+            "EMBED_DOC_PREFIX": "document: ",
+            "DB_URL_ADMIN": "postgresql+psycopg2://admin:secret@h/db",
+        },
+    )
+    for key in (
+        "EMBED_MODEL",
+        "EMBED_QUERY_PREFIX",
+        "EMBED_DOC_PREFIX",
+        "DB_URL_ADMIN",
+    ):
+        monkeypatch.delenv(key, raising=False)
+
+    env_module.load_agent_env(override=True)
+
+    assert os.environ["EMBED_MODEL"] == "nomic-embed-text"
+    assert os.environ["EMBED_QUERY_PREFIX"] == "query: "
+    assert os.environ["EMBED_DOC_PREFIX"] == "document: "
+    assert "DB_URL_ADMIN" not in os.environ
+
+
 def test_load_admin_env_exports_the_admin_file(monkeypatch, tmp_path):
     admin_file = tmp_path / "admin.env"
     admin_file.write_text("DB_URL_ADMIN=postgresql+psycopg2://admin:secret@h/db\n", encoding="utf-8")
