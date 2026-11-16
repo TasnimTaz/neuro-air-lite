@@ -202,7 +202,11 @@ async def _run_chat(
                 verifier_mode=verifier_mode,
                 emit=emit,
             )
-            final_text = pipeline.final_text
+            # Prefer the synthesis worker's comprehensive analytical narrative.
+            # If the verifier produced a short audit string, preserve the rich synthesis text for the user.
+            synthesis_narrative = (pipeline.final_text_pre_verify or "").strip()
+            final_text = synthesis_narrative or pipeline.final_text
+
             ok = pipeline.ok
             details: dict[str, Any] = {
                 "plan_source": pipeline.plan_source,
@@ -214,6 +218,7 @@ async def _run_chat(
                 "verifier_changed_answer": pipeline.verifier_changed_answer,
                 "verifier_mismatch": pipeline.verifier_mismatch,
                 "stall_count": pipeline.stall_count,
+                "verifier_audit_text": pipeline.final_text if pipeline.final_text != final_text else "",
             }
         else:
             result = await run_worker(

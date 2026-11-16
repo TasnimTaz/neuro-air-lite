@@ -1,0 +1,922 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Neuro-Air Lite — Full Multi-Agent Matrix (All 6 Agents)</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+  <style>
+    :root {
+      --bg: #090d16;
+      --card-bg: rgba(16, 23, 38, 0.75);
+      --border: rgba(56, 189, 248, 0.15);
+      --primary: #38bdf8;
+      --accent: #818cf8;
+      --green: #10b981;
+      --green-glow: rgba(16, 185, 129, 0.2);
+      --text: #f1f5f9;
+      --text-muted: #94a3b8;
+      --font-sans: 'Inter', sans-serif;
+      --font-mono: 'JetBrains Mono', monospace;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--font-sans);
+      min-height: 100vh;
+      overflow-x: hidden;
+      background-image: 
+        radial-gradient(circle at 50% 20%, rgba(56, 189, 248, 0.08) 0%, transparent 60%),
+        radial-gradient(circle at 80% 80%, rgba(129, 140, 248, 0.05) 0%, transparent 50%);
+    }
+
+    header {
+      padding: 1.2rem 2.5rem;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      background: rgba(9, 13, 22, 0.8);
+      backdrop-filter: blur(12px);
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+    .logo {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      font-size: 1.25rem;
+      font-weight: 700;
+      color: #fff;
+    }
+    .badge {
+      background: rgba(56, 189, 248, 0.15);
+      color: var(--primary);
+      border: 1px solid rgba(56, 189, 248, 0.3);
+      padding: 2px 8px;
+      font-size: 0.75rem;
+      border-radius: 99px;
+    }
+    .status-chip {
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+      font-size: 0.85rem;
+      font-family: var(--font-mono);
+      background: rgba(255, 255, 255, 0.05);
+      padding: 0.4rem 0.9rem;
+      border-radius: 99px;
+      border: 1px solid var(--border);
+    }
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--green);
+      box-shadow: 0 0 10px var(--green);
+    }
+
+    .view-container {
+      position: relative;
+      min-height: calc(100vh - 75px);
+    }
+
+    /* VIEW 1: Main Dashboard */
+    #dashboard-view {
+      padding: 2.5rem;
+      max-width: 1400px;
+      margin: 0 auto;
+      transition: all 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: 440px 1fr;
+      gap: 2rem;
+    }
+    .card {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 18px;
+      padding: 1.8rem;
+      box-shadow: 0 10px 30px -10px rgba(0,0,0,0.5);
+      backdrop-filter: blur(16px);
+    }
+    .card h2 {
+      font-size: 1.15rem;
+      margin-bottom: 1.2rem;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      color: var(--primary);
+    }
+    textarea {
+      width: 100%;
+      background: #0d121f;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 1rem;
+      color: #fff;
+      font-size: 0.95rem;
+      font-family: var(--font-sans);
+      resize: vertical;
+      min-height: 120px;
+    }
+    textarea:focus { outline: none; border-color: var(--primary); }
+    .btn-run {
+      margin-top: 1.2rem;
+      width: 100%;
+      padding: 0.9rem;
+      background: linear-gradient(135deg, #0284c7, #38bdf8);
+      border: none;
+      border-radius: 12px;
+      color: #fff;
+      font-weight: 600;
+      font-size: 1rem;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.6rem;
+      box-shadow: 0 4px 20px rgba(56, 189, 248, 0.35);
+      transition: all 0.2s;
+    }
+    .btn-run:hover { filter: brightness(1.1); transform: translateY(-1px); }
+
+    .sample-tags {
+      margin-top: 1.5rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+    }
+    .sample-btn {
+      text-align: left;
+      padding: 0.6rem 0.9rem;
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: var(--text-muted);
+      font-size: 0.85rem;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .sample-btn:hover { background: rgba(56, 189, 248, 0.1); color: var(--primary); }
+
+    /* Professional Executive KPI Output */
+    .answer-box {
+      border-radius: 14px;
+      background: rgba(255, 255, 255, 0.02);
+      border: 1px solid var(--border);
+      padding: 1.6rem;
+    }
+    
+    .answer-top-bar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 1.2rem;
+      padding-bottom: 0.8rem;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    }
+    .answer-heading {
+      font-size: 0.95rem;
+      font-weight: 600;
+      color: var(--text);
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+    .verified-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35rem;
+      font-size: 0.75rem;
+      font-family: var(--font-mono);
+      font-weight: 600;
+      color: var(--green);
+      background: var(--green-glow);
+      border: 1px solid rgba(16, 185, 129, 0.3);
+      padding: 2px 8px;
+      border-radius: 99px;
+    }
+
+    .kpi-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 1rem;
+      margin-bottom: 1.5rem;
+    }
+    .kpi-card {
+      background: #0f1524;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 12px;
+      padding: 1.1rem 1.3rem;
+      position: relative;
+      overflow: hidden;
+      transition: all 0.2s ease;
+    }
+    .kpi-card:hover {
+      border-color: rgba(56, 189, 248, 0.4);
+      transform: translateY(-2px);
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
+    }
+    .kpi-card::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 4px;
+      height: 100%;
+      background: var(--primary);
+    }
+    .kpi-card.warning::before { background: #f43f5e; }
+    .kpi-card.accent::before { background: #818cf8; }
+    .kpi-card.success::before { background: #10b981; }
+
+    .kpi-label {
+      font-size: 0.75rem;
+      font-weight: 600;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      margin-bottom: 0.4rem;
+    }
+    .kpi-value-row {
+      display: flex;
+      align-items: baseline;
+      gap: 0.4rem;
+    }
+    .kpi-num {
+      font-size: 1.7rem;
+      font-weight: 700;
+      font-family: var(--font-mono);
+      color: #fff;
+    }
+    .kpi-unit {
+      font-size: 0.8rem;
+      color: var(--text-muted);
+      font-family: var(--font-sans);
+    }
+    .kpi-tag {
+      display: inline-block;
+      margin-top: 0.5rem;
+      font-size: 0.72rem;
+      font-weight: 600;
+      padding: 2px 7px;
+      border-radius: 4px;
+      background: rgba(255, 255, 255, 0.06);
+      color: var(--text-muted);
+    }
+
+    .analysis-prose {
+      font-size: 0.92rem;
+      line-height: 1.7;
+      color: #cbd5e1;
+      background: rgba(255, 255, 255, 0.02);
+      border-radius: 10px;
+      padding: 1rem 1.2rem;
+      border-left: 3px solid var(--primary);
+    }
+
+    .chart-container {
+      margin-top: 1.5rem;
+      height: 380px;
+      width: 100%;
+      border-radius: 14px;
+      background: #0d121f;
+      border: 1px solid var(--border);
+    }
+
+    /* VIEW 2: Agent Orchestration Matrix */
+    #matrix-view {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: radial-gradient(circle at center, #10192e 0%, #060911 100%);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      opacity: 0;
+      pointer-events: none;
+      transform: scale(0.96);
+      transition: all 0.6s cubic-bezier(0.16, 1, 0.3, 1);
+      z-index: 50;
+      overflow: hidden;
+    }
+
+    #matrix-view.active {
+      opacity: 1;
+      pointer-events: auto;
+      transform: scale(1);
+    }
+
+    .matrix-header {
+      position: absolute;
+      top: 2rem;
+      text-align: center;
+    }
+    .matrix-title {
+      font-size: 1.5rem;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      color: #fff;
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      justify-content: center;
+    }
+    .matrix-subtitle {
+      font-size: 0.88rem;
+      color: var(--primary);
+      font-family: var(--font-mono);
+      margin-top: 0.4rem;
+    }
+
+    .matrix-canvas-wrapper {
+      position: relative;
+      width: 960px;
+      height: 640px;
+    }
+    #matrix-svg {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+    }
+
+    .agent-node {
+      position: absolute;
+      transform: translate(-50%, -50%);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 0.5rem;
+      cursor: default;
+      transition: all 0.3s ease;
+    }
+    .node-orb {
+      width: 72px;
+      height: 72px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: rgba(16, 23, 38, 0.95);
+      border: 2px solid var(--border);
+      box-shadow: 0 0 20px rgba(0,0,0,0.8);
+      position: relative;
+      transition: all 0.4s ease;
+    }
+    .node-orb svg {
+      width: 28px;
+      height: 28px;
+      stroke: var(--text-muted);
+      transition: all 0.3s;
+    }
+    .node-label {
+      font-size: 0.82rem;
+      font-weight: 600;
+      color: var(--text-muted);
+      background: rgba(9, 13, 22, 0.85);
+      padding: 3px 10px;
+      border-radius: 99px;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      white-space: nowrap;
+      transition: all 0.3s;
+    }
+
+    .agent-node.active .node-orb {
+      border-color: var(--primary);
+      box-shadow: 0 0 35px var(--primary);
+      transform: scale(1.15);
+      background: #0f172a;
+    }
+    .agent-node.active .node-orb svg {
+      stroke: var(--primary);
+    }
+    .agent-node.active .node-label {
+      color: #fff;
+      border-color: var(--primary);
+      background: rgba(56, 189, 248, 0.2);
+    }
+
+    #node-coordinator { top: 50%; left: 50%; }
+    #node-coordinator .node-orb {
+      width: 94px;
+      height: 94px;
+      border-color: var(--accent);
+      box-shadow: 0 0 30px rgba(129, 140, 248, 0.3);
+    }
+    #node-coordinator .node-orb svg {
+      width: 40px;
+      height: 40px;
+      stroke: var(--accent);
+    }
+    #node-coordinator.active .node-orb {
+      border-color: #a78bfa;
+      box-shadow: 0 0 45px #818cf8;
+      animation: pulse-ring 1.8s infinite;
+    }
+
+    /* Node positioning */
+    #node-knowledge { top: 18%; left: 24%; }
+    #node-data { top: 14%; left: 50%; }
+    #node-meteo { top: 18%; left: 76%; }
+    #node-pollution { top: 78%; left: 76%; }
+    #node-synthesis { top: 86%; left: 50%; }
+    #node-verifier { top: 78%; left: 24%; }
+
+    .packet-badge {
+      position: absolute;
+      background: linear-gradient(135deg, #0284c7, #38bdf8);
+      color: #fff;
+      font-family: var(--font-mono);
+      font-size: 0.72rem;
+      font-weight: 600;
+      padding: 4px 10px;
+      border-radius: 99px;
+      box-shadow: 0 0 18px rgba(56, 189, 248, 0.9);
+      white-space: nowrap;
+      pointer-events: none;
+      z-index: 60;
+      transform: translate(-50%, -50%);
+      transition: opacity 0.3s;
+    }
+    .packet-badge.ret {
+      background: linear-gradient(135deg, #059669, #34d399);
+      box-shadow: 0 0 18px rgba(52, 211, 153, 0.9);
+    }
+
+    .matrix-hud {
+      position: absolute;
+      bottom: 1.8rem;
+      width: 820px;
+      background: rgba(13, 18, 30, 0.88);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 0.9rem 1.4rem;
+      backdrop-filter: blur(16px);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      box-shadow: 0 0 35px rgba(0,0,0,0.6);
+    }
+    .hud-log {
+      display: flex;
+      align-items: center;
+      gap: 0.8rem;
+      font-family: var(--font-mono);
+      font-size: 0.84rem;
+      color: var(--primary);
+    }
+    .hud-spinner {
+      width: 14px;
+      height: 14px;
+      border: 2px solid var(--primary);
+      border-top-color: transparent;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+    .hud-step {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      font-family: var(--font-mono);
+    }
+
+    @keyframes spin { 100% { transform: rotate(360deg); } }
+    @keyframes pulse-ring {
+      0% { box-shadow: 0 0 0 0 rgba(129, 140, 248, 0.6); }
+      70% { box-shadow: 0 0 0 22px rgba(129, 140, 248, 0); }
+      100% { box-shadow: 0 0 0 0 rgba(129, 140, 248, 0); }
+    }
+  </style>
+</head>
+<body>
+
+  <header>
+    <div class="logo">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#38bdf8" stroke-width="2.5"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
+      Neuro-Air <span class="badge">FULL 6-AGENT DEMO</span>
+    </div>
+    <div class="status-chip">
+      <div class="status-dot"></div>
+      <span id="header-status">Cluster Ready</span>
+    </div>
+  </header>
+
+  <div class="view-container">
+
+    <!-- VIEW 1: Main Dashboard -->
+    <main id="dashboard-view">
+      <div class="grid">
+        <div class="card">
+          <h2>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+            Ask HK Air Quality
+          </h2>
+          <textarea id="query-input">Assess Tai Po fire air quality impacts, weather wind trajectory, WHO exceedance and nearby hospitals</textarea>
+          
+          <button id="run-btn" class="btn-run" onclick="startFullOrchestrationDemo()">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+            Launch Full Multi-Agent Pipeline
+          </button>
+
+          <div class="sample-tags">
+            <span style="font-size: 0.78rem; text-transform: uppercase; color: var(--text-muted); font-weight: 600;">Sample Complex Tasks</span>
+            <button class="sample-btn" onclick="setQuery(this)">Assess Tai Po fire air quality impacts, weather wind trajectory, WHO exceedance and nearby hospitals</button>
+            <button class="sample-btn" onclick="setQuery(this)">Causeway Bay roadside NO2 vs prevailing wind dispersion & WHO guideline</button>
+            <button class="sample-btn" onclick="setQuery(this)">Kwun Tong industrial emission vs school proximity & health advisory</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
+            Executive Report & Visualizations
+          </h2>
+          <div id="answer-container" class="answer-box">
+            <p style="color: var(--text-muted);">Click "Launch Full Multi-Agent Pipeline" to see all 6 specialized agents collaborate in real-time.</p>
+          </div>
+          <div id="chart-area" class="chart-container" style="display: none;"></div>
+        </div>
+      </div>
+    </main>
+
+    <!-- VIEW 2: Agent Orchestration Matrix (Full 6 Agents) -->
+    <div id="matrix-view">
+      <div class="matrix-header">
+        <div class="matrix-title">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#38bdf8" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 2a10 10 0 0 1 10 10"/><path d="M12 12 2 12"/></svg>
+          Full 6-Agent Collaboration Matrix
+        </div>
+        <div class="matrix-subtitle" id="matrix-task-label">TASK: Initializing Coordinator Plan...</div>
+      </div>
+
+      <div class="matrix-canvas-wrapper" id="canvas-wrapper">
+        <svg id="matrix-svg"></svg>
+
+        <!-- Coordinator (Center) -->
+        <div class="agent-node" id="node-coordinator">
+          <div class="node-orb">
+            <svg viewBox="0 0 24 24" fill="none" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
+          </div>
+          <span class="node-label">1. Coordinator</span>
+        </div>
+
+        <!-- 1. Knowledge Retrieval (RAG) -->
+        <div class="agent-node" id="node-knowledge">
+          <div class="node-orb">
+            <svg viewBox="0 0 24 24" fill="none" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
+          </div>
+          <span class="node-label">2. Knowledge (RAG)</span>
+        </div>
+
+        <!-- 2. Data Acquisition -->
+        <div class="agent-node" id="node-data">
+          <div class="node-orb">
+            <svg viewBox="0 0 24 24" fill="none" stroke-width="2"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>
+          </div>
+          <span class="node-label">3. Data Acquisition</span>
+        </div>
+
+        <!-- 3. Multivariate Meteo -->
+        <div class="agent-node" id="node-meteo">
+          <div class="node-orb">
+            <svg viewBox="0 0 24 24" fill="none" stroke-width="2"><path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"/></svg>
+          </div>
+          <span class="node-label">4. Multivariate Meteo</span>
+        </div>
+
+        <!-- 4. Pollution Analysis -->
+        <div class="agent-node" id="node-pollution">
+          <div class="node-orb">
+            <svg viewBox="0 0 24 24" fill="none" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+          </div>
+          <span class="node-label">5. Pollution Analysis</span>
+        </div>
+
+        <!-- 5. Synthesis Report -->
+        <div class="agent-node" id="node-synthesis">
+          <div class="node-orb">
+            <svg viewBox="0 0 24 24" fill="none" stroke-width="2"><rect x="18" y="3" width="4" height="18"/><rect x="10" y="8" width="4" height="13"/><rect x="2" y="13" width="4" height="8"/></svg>
+          </div>
+          <span class="node-label">6. Synthesis & Charts</span>
+        </div>
+
+        <!-- 6. DB Verifier -->
+        <div class="agent-node" id="node-verifier">
+          <div class="node-orb">
+            <svg viewBox="0 0 24 24" fill="none" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+          </div>
+          <span class="node-label">7. DB Verifier</span>
+        </div>
+      </div>
+
+      <!-- HUD Bottom Bar -->
+      <div class="matrix-hud">
+        <div class="hud-log">
+          <div class="hud-spinner"></div>
+          <span id="hud-text">Orchestrator ready...</span>
+        </div>
+        <div class="hud-step" id="hud-step">Ready</div>
+      </div>
+    </div>
+
+  </div>
+
+  <script>
+    function setQuery(btn) {
+      document.getElementById('query-input').value = btn.innerText;
+    }
+
+    const nodeCoords = {
+      coordinator: { x: 480, y: 320 },
+      knowledge:   { x: 230, y: 115 },
+      data:        { x: 480, y: 90 },
+      meteo:       { x: 730, y: 115 },
+      pollution:   { x: 730, y: 500 },
+      synthesis:   { x: 480, y: 550 },
+      verifier:    { x: 230, y: 500 }
+    };
+
+    function initStaticGridLines() {
+      const svg = document.getElementById('matrix-svg');
+      svg.innerHTML = '';
+      const c = nodeCoords.coordinator;
+
+      for (const [key, pt] of Object.entries(nodeCoords)) {
+        if (key === 'coordinator') continue;
+        const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+        line.setAttribute('x1', c.x);
+        line.setAttribute('y1', c.y);
+        line.setAttribute('x2', pt.x);
+        line.setAttribute('y2', pt.y);
+        line.setAttribute('stroke', 'rgba(56, 189, 248, 0.12)');
+        line.setAttribute('stroke-width', '1.5');
+        line.setAttribute('stroke-dasharray', '4 4');
+        svg.appendChild(line);
+      }
+    }
+
+    function animatePacket(fromKey, toKey, label, isReturn = false, durationMs = 1100) {
+      return new Promise(resolve => {
+        const from = nodeCoords[fromKey];
+        const to = nodeCoords[toKey];
+        const wrapper = document.getElementById('canvas-wrapper');
+
+        const packet = document.createElement('div');
+        packet.className = 'packet-badge' + (isReturn ? ' ret' : '');
+        packet.innerText = label;
+        packet.style.left = `${from.x}px`;
+        packet.style.top = `${from.y}px`;
+        wrapper.appendChild(packet);
+
+        const startTime = performance.now();
+
+        function move(now) {
+          const elapsed = now - startTime;
+          const progress = Math.min(elapsed / durationMs, 1);
+          const ease = progress < 0.5 ? 2 * progress * progress : -1 + (4 - 2 * progress) * progress;
+
+          const curX = from.x + (to.x - from.x) * ease;
+          const curY = from.y + (to.y - from.y) * ease;
+
+          packet.style.left = `${curX}px`;
+          packet.style.top = `${curY}px`;
+
+          if (progress < 1) {
+            requestAnimationFrame(move);
+          } else {
+            packet.remove();
+            resolve();
+          }
+        }
+        requestAnimationFrame(move);
+      });
+    }
+
+    function setActiveNode(key, active = true) {
+      const el = document.getElementById(`node-${key}`);
+      if (!el) return;
+      if (active) el.classList.add('active');
+      else el.classList.remove('active');
+    }
+
+    function clearAllActiveNodes() {
+      document.querySelectorAll('.agent-node').forEach(n => n.classList.remove('active'));
+    }
+
+    async function startFullOrchestrationDemo() {
+      const dashboard = document.getElementById('dashboard-view');
+      const matrix = document.getElementById('matrix-view');
+      const hudText = document.getElementById('hud-text');
+      const hudStep = document.getElementById('hud-step');
+      const taskLabel = document.getElementById('matrix-task-label');
+
+      initStaticGridLines();
+      clearAllActiveNodes();
+      matrix.classList.add('active');
+      document.getElementById('header-status').innerText = 'All Agents Active';
+
+      // 1. COORDINATOR PLANNING
+      setActiveNode('coordinator', true);
+      taskLabel.innerText = "COORDINATOR: Formulating 6-Agent DAG Execution Plan";
+      hudText.innerText = "Decomposing Tai Po fire query into sequential domain subtasks...";
+      hudStep.innerText = "Step 1/7 · Coordinator Plan";
+      await new Promise(r => setTimeout(r, 1200));
+
+      // 2. KNOWLEDGE RETRIEVAL (RAG)
+      taskLabel.innerText = "TASK: Retrieve WHO guideline thresholds & HKEPD AQHI standards";
+      hudText.innerText = "Coordinator -> Knowledge (RAG): Query markdown domain corpus";
+      hudStep.innerText = "Step 2/7 · Knowledge Retrieval";
+      await animatePacket('coordinator', 'knowledge', 'CALL: kb_search("PM2.5 WHO thresholds")');
+      setActiveNode('knowledge', true);
+      hudText.innerText = "Knowledge Worker: Vector similarity lookup in local knowledge base...";
+      await new Promise(r => setTimeout(r, 1300));
+      hudText.innerText = "Knowledge Worker: Found WHO 24h limit (15 µg/m³) & HK AQO (50 µg/m³)";
+      await animatePacket('knowledge', 'coordinator', 'RETURNS: thresholds_dict', true);
+      setActiveNode('knowledge', false);
+
+      // 3. DATA ACQUISITION
+      taskLabel.innerText = "TASK: Fetch Tai Po hourly air sensors + OSM hospitals within 2km";
+      hudText.innerText = "Coordinator -> Data Acquisition: Query PostgreSQL/PostGIS";
+      hudStep.innerText = "Step 3/7 · Data Acquisition";
+      await animatePacket('coordinator', 'data', 'TASK: fetch_taipo_osm(radius=2000)');
+      setActiveNode('data', true);
+      hudText.innerText = "Data Acquisition: Spatial ST_DWithin query for sensitive receptors & AQ rows...";
+      await new Promise(r => setTimeout(r, 1400));
+      hudText.innerText = "Data Acquisition: Loaded 168h pollutant readings & 2 nearby hospitals";
+      await animatePacket('data', 'coordinator', 'RETURNS: df_aq (168 rows) + receptors_df', true);
+      setActiveNode('data', false);
+
+      // 4. MULTIVARIATE METEO
+      taskLabel.innerText = "TASK: Process weather stations: wind speed, direction & plume spread";
+      hudText.innerText = "Coordinator -> Multivariate Meteo: Hourly meteorological join";
+      hudStep.innerText = "Step 4/7 · Meteo Analysis";
+      await animatePacket('coordinator', 'meteo', 'CALL: meteo_join(wind_dir, speed)');
+      setActiveNode('meteo', true);
+      hudText.innerText = "Multivariate Meteo: Calculating downwind vectors (NE to SW drift 14.2 km/h)...";
+      await new Promise(r => setTimeout(r, 1400));
+      hudText.innerText = "Multivariate Meteo: Downwind trajectory confirmed passing Alice Ho Miu Ling Hospital";
+      await animatePacket('meteo', 'coordinator', 'RETURNS: meteo_dispersion_vector', true);
+      setActiveNode('meteo', false);
+
+      // 5. POLLUTION ANALYSIS
+      taskLabel.innerText = "TASK: Calculate peak-to-mean ratio, z-score & exceedance hours";
+      hudText.innerText = "Coordinator -> Pollution Analysis: Statistical baseline computation";
+      hudStep.innerText = "Step 5/7 · Pollution Statistics";
+      await animatePacket('coordinator', 'pollution', 'CALL: compute_peak_ratio(df_aq)');
+      setActiveNode('pollution', true);
+      hudText.innerText = "Pollution Analysis: Pre-fire mean 27.3 µg/m³ vs Fire Peak 54.6 µg/m³ (2.0x ratio)...";
+      await new Promise(r => setTimeout(r, 1400));
+      hudText.innerText = "Pollution Analysis: Z-score = 2.45 against preceding 14-day matched-hour baseline";
+      await animatePacket('pollution', 'coordinator', 'STAGED: fire_metrics_dict', true);
+      setActiveNode('pollution', false);
+
+      // 6. SYNTHESIS REPORT
+      taskLabel.innerText = "TASK: Synthesize comprehensive findings & generate ECharts timeline";
+      hudText.innerText = "Coordinator -> Synthesis: Generate structured report & ECharts JSON";
+      hudStep.innerText = "Step 6/7 · Synthesis & Viz";
+      await animatePacket('coordinator', 'synthesis', 'CALL: charts.line() + synthesis');
+      setActiveNode('synthesis', true);
+      hudText.innerText = "Synthesis: Building multi-series hourly trend and impact assessment...";
+      await new Promise(r => setTimeout(r, 1500));
+      hudText.innerText = "Synthesis: Output ready with structured KPI attributes";
+      await animatePacket('synthesis', 'coordinator', 'EMIT: chart_config + final_report', true);
+      setActiveNode('synthesis', false);
+
+      // 7. DB VERIFIER
+      taskLabel.innerText = "TASK: Independent SQL recomputation to prevent hallucination";
+      hudText.innerText = "Coordinator -> DB Verifier: Re-run fresh query from database";
+      hudStep.innerText = "Step 7/7 · Independent Verification";
+      await animatePacket('coordinator', 'verifier', 'AUDIT: verify_peak_and_ratio()');
+      setActiveNode('verifier', true);
+      hudText.innerText = "DB Verifier: Executing independent SQL on read-only PostgreSQL role...";
+      await new Promise(r => setTimeout(r, 1300));
+      hudText.innerText = "DB Verifier: Match confirmed (Calculated = 54.6, Stored = 54.6). Verified!";
+      // Send single verified confirmation packet back to coordinator
+      await animatePacket('verifier', 'coordinator', 'CONFIRMED: Verified', true);
+      setActiveNode('verifier', false);
+      setActiveNode('coordinator', false);
+
+      // COMPLETE & RETURN
+      taskLabel.innerText = "ALL 6 AGENTS COMPLETED SUCCESSFULLY · Returning to Dashboard...";
+      hudText.innerText = "Finalizing Executive Dashboard Report...";
+      await new Promise(r => setTimeout(r, 1000));
+
+      matrix.classList.remove('active');
+      document.getElementById('header-status').innerText = 'Complete (All 6 Verified)';
+
+      renderFullIncidentResult();
+    }
+
+    function renderFullIncidentResult() {
+      const container = document.getElementById('answer-container');
+      const chartArea = document.getElementById('chart-area');
+
+      container.innerHTML = `
+        <div class="answer-top-bar">
+          <div class="answer-heading">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#38bdf8" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+            Tai Po Fire Incident — Multi-Agent Atmospheric Impact Assessment
+          </div>
+          <span class="verified-badge">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>
+            DB Verified · 6 Agents
+          </span>
+        </div>
+
+        <div class="kpi-grid">
+          <div class="kpi-card warning">
+            <div class="kpi-label">Peak PM2.5</div>
+            <div class="kpi-value-row">
+              <span class="kpi-num">54.6</span>
+              <span class="kpi-unit">µg/m³</span>
+            </div>
+            <span class="kpi-tag">2.0x Pre-fire Mean</span>
+          </div>
+
+          <div class="kpi-card accent">
+            <div class="kpi-label">Peak NO2 Level</div>
+            <div class="kpi-value-row">
+              <span class="kpi-num">123.2</span>
+              <span class="kpi-unit">µg/m³</span>
+            </div>
+            <span class="kpi-tag">2.5x Pre-fire Mean</span>
+          </div>
+
+          <div class="kpi-card">
+            <div class="kpi-label">Wind Dispersion</div>
+            <div class="kpi-value-row">
+              <span class="kpi-num">NE-SW</span>
+              <span class="kpi-unit">14.2 km/h</span>
+            </div>
+            <span class="kpi-tag">Plume Vector</span>
+          </div>
+
+          <div class="kpi-card success">
+            <div class="kpi-label">Nearest Sensitive Receptor</div>
+            <div class="kpi-value-row">
+              <span class="kpi-num">Alice Ho Miu Ling</span>
+            </div>
+            <span class="kpi-tag">1.4 km Downwind Hospital</span>
+          </div>
+        </div>
+
+        <div class="analysis-prose">
+          <strong style="color: #fff;">Analytical Synthesis:</strong> The acute incident at Tai Po produced a maximum hourly PM2.5 spike of <strong>54.6 µg/m³</strong> (exceeding WHO 24h threshold of 15 µg/m³ by 3.64x). Multivariate meteorological tracking confirmed a persistent North-East to South-West surface wind corridor (14.2 km/h) transporting the combustion plume directly toward two educational facilities and one regional hospital within a 2.0 km radius.
+        </div>
+      `;
+
+      chartArea.style.display = 'block';
+      const chart = echarts.init(chartArea, 'dark');
+      chart.setOption({
+        backgroundColor: 'transparent',
+        title: { text: 'Hourly PM2.5 & NO2 Evolution Across Fire Window (Nov 2025)', textStyle: { color: '#f1f5f9', fontSize: 13, fontWeight: 'normal' } },
+        tooltip: { trigger: 'axis' },
+        legend: { data: ['PM2.5 (µg/m³)', 'NO2 (µg/m³)', 'WHO Threshold (15 µg/m³)'], textStyle: { color: '#94a3b8' }, top: '25px' },
+        grid: { top: '70px', left: '40px', right: '40px', bottom: '30px' },
+        xAxis: { 
+          type: 'category', 
+          data: ['T-24h', 'T-18h', 'T-12h', 'T-6h', 'Fire Ignition', 'T+3h', 'T+6h (Peak)', 'T+12h', 'T+18h', 'T+24h (Post)'],
+          axisLine: { lineStyle: { color: '#334155' } }
+        },
+        yAxis: { type: 'value', name: 'µg/m³', splitLine: { lineStyle: { color: 'rgba(255,255,255,0.06)' } } },
+        series: [
+          {
+            name: 'PM2.5 (µg/m³)',
+            type: 'line',
+            smooth: true,
+            data: [22.1, 24.5, 27.3, 28.0, 41.2, 49.5, 54.6, 38.2, 30.1, 25.4],
+            itemStyle: { color: '#38bdf8' },
+            areaStyle: { color: 'rgba(56, 189, 248, 0.15)' }
+          },
+          {
+            name: 'NO2 (µg/m³)',
+            type: 'line',
+            smooth: true,
+            data: [45.2, 48.0, 50.1, 52.0, 85.4, 110.2, 123.2, 88.0, 65.4, 52.1],
+            itemStyle: { color: '#fb7185' }
+          },
+          {
+            name: 'WHO Threshold (15 µg/m³)',
+            type: 'line',
+            data: [15, 15, 15, 15, 15, 15, 15, 15, 15, 15],
+            itemStyle: { color: '#f59e0b' },
+            lineStyle: { type: 'dashed' }
+          }
+        ]
+      });
+    }
+  </script>
+</body>
+</html>
