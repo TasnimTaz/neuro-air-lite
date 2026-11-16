@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Neuro-Air Lite - Hong Kong air-quality analyst">
+  <title>Neuro-Air Lite</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js" defer></script>
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <p class="eyebrow">Flightless research demo</p>
+      <h1>Neuro-Air Lite</h1>
+      <p class="subtitle">Ask the Hong Kong air-quality analyst. Numbers are computed by
+        the read-only database runtime, not guessed by the model.</p>
+    </div>
+    <span id="status" class="status" role="status" aria-live="polite">Idle</span>
+  </header>
+
+  <main class="layout">
+    <section class="panel ask-panel" aria-labelledby="ask-heading">
+      <h2 id="ask-heading">Ask a question</h2>
+      <form id="chat-form">
+        <label class="field-label" for="query">Question</label>
+        <textarea id="query" name="query" rows="5" maxlength="4000" required
+          placeholder="e.g. Which station had the highest 2025 hourly PM2.5 reading?"></textarea>
+
+        <div class="row">
+          <label class="field-label" for="arm">Agent topology</label>
+          <select id="arm" name="arm">
+            <option value="single" selected>Single agent (default)</option>
+            <option value="multi">Coordinator + workers</option>
+          </select>
+        </div>
+
+        <button id="send" type="submit">Run query</button>
+        <p class="hint">One query at a time. A second query returns “busy” until the
+          first one finishes. Requests are capped at 600 seconds.</p>
+      </form>
+    </section>
+
+    <section class="panel answer-panel" aria-labelledby="answer-heading">
+      <div class="panel-heading">
+        <h2 id="answer-heading">Answer</h2>
+        <span id="answer-meta" class="meta"></span>
+      </div>
+      <div id="answer" class="answer empty">Run a query to see the computed result.</div>
+      <div id="charts" class="charts"></div>
+      <div id="error" class="error" hidden></div>
+    </section>
+
+    <section class="panel trace-panel" aria-labelledby="trace-heading">
+      <div class="panel-heading">
+        <h2 id="trace-heading">Trace</h2>
+        <span id="trace-meta" class="meta"></span>
+      </div>
+      <ol id="trace" class="trace"></ol>
+    </section>
+  </main>
+
+  <footer>
+    <p>Local demo · the repo <code>.env</code> contains only the read-only DSN and
+      LLM settings; the admin DSN lives outside the repository.</p>
+  </footer>
+</body>
+</html>

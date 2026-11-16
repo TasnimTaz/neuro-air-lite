@@ -942,6 +942,56 @@ The evaluated base prompt and multi prompts are unchanged by Day 6. Wiring the
 gate into `api/` or `kb_search` into the knowledge-retrieval role is a later,
 hash-changing step.
 
+## API and demo UI (Day 7)
+
+`api/app.py` is the FastAPI application; `api/static/` is the browser UI.
+
+```powershell
+uv run uvicorn api.app:app --reload --port 8000
+# open http://127.0.0.1:8000
+```
+
+`POST /api/chat` takes one JSON object and returns `text/event-stream`:
+
+```json
+{"query": "Which station had the highest 2025 hourly PM2.5 reading?", "arm": "single"}
+```
+
+`arm` is `single` (default) or `multi`; `query` is also accepted as `question` or
+`message` for small clients. The SSE event names are `start`, `plan` (multi
+only), `worker_start`, `worker_stall`, `code`, `output`, `agent_final`, `final`,
+`error` and `done`. The public `final` event is one object with `answer`,
+`final_text`, the accumulated ECharts configs, usage, elapsed seconds and the
+topology's step/verifier counters. The inner orchestrator's textual `final` is
+renamed `agent_final` so the two cannot be confused. A 15 s SSE comment keeps
+an idle connection alive while a model call is in flight.
+
+Each request gets a fresh `PythonRuntime` and closes it in a `finally` block.
+The API only calls `build_runtime()`; it never reads `DB_URL_ADMIN`.
+`create_app()` calls `load_agent_env(scrub=True)`, so admin-only keys are removed
+from the API process even if the parent shell exported them.
+
+`PythonRuntime.execute` uses process-wide `contextlib.redirect_stdout`, so the
+endpoint is intentionally single-flight: a second query gets `429` with
+`Retry-After: 2` instead of racing the first trace. This is a guard rail until
+Day 10 moves execution into a subprocess. The whole run is wrapped in a
+600-second timeout; a timeout emits an `error` event and releases the gate.
+
+The static UI posts the question, parses the SSE stream, shows the trace, renders
+the final text and `ANSWER`, and draws every runtime chart with ECharts. It has no
+admin credentials and no database code of its own.
+
+The Day 7 tests use a scripted fake LLM and `PythonRuntime` instances; they do not
+call Ollama or Postgres:
+
+```powershell
+uv run pytest -q tests/test_api.py
+```
+
+The live browser demo is deliberately **not run yet**: the background verifier
+mode evaluation is still using the local Ollama model, and live queries would
+distort its latency measurements.
+
 ## Conventions
 
 - The agent only ever connects with the read-only `neuro_ro` role. Ingestion
@@ -989,5 +1039,6 @@ hash-changing step.
 | 3 | LLM client, runtime, security, single agent | done |
 | 4 | schema prompt, geocoder, charts, frozen v2 baseline | done |
 | 5 | coordinator, workers, verifier | implemented; official 3-repeat 41/60 vs single 46/60 (p=0.109; 5.21× tokens) — no gain |
-| 5b | matched-budget multi audit, verifier modes, v3 prompt | v3 rerun done: 40/60 multi vs 45/60 single (p=0.289) — negative; verifier-mode comparison next |
-| 6 | relevance gate, knowledge retrieval, verifier tuning | next |
+| 5b | matched-budget multi audit, verifier modes, v3 prompt | v3 rerun done: 40/60 multi vs 45/60 single (p=0.289) — negative; flag/none matched runs in progress |
+| 6 | relevance gate, knowledge retrieval, verifier tuning | implemented offline; live calibration and verifier-mode comparison pending |
+| 7 | FastAPI SSE API and ECharts demo UI | implemented; fake-LLM tests pass, live demo deferred until eval jobs finish |
