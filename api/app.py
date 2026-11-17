@@ -28,7 +28,7 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable, Literal
 
 from fastapi import FastAPI, HTTPException, Request, status
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
 from starlette.background import BackgroundTask
@@ -115,6 +115,49 @@ class BusyGate:
         return _Lease(self)
 
 
+class RuntimeGuard:
+    """Detect a runtime that outlived its request.
+
+    ``asyncio.wait_for`` cancels the asyncio task, but a worker thread blocked
+    in ``PythonRuntime.execute`` keeps running. Because that method redirects
+    process-wide stdout, starting a second run would corrupt both traces. If a
+    timeout or client disconnect leaves execution in flight, the app is marked
+    poisoned and refuses new chat requests until the process is restarted.
+    """
+
+    def __init__(self) -> None:
+        self.poisoned = False
+        self.runtime: PythonRuntime | None = None
+
+    def attach(self, runtime: PythonRuntime) -> None:
+        self.runtime = runtime
+        original_execute = runtime.execute
+        runtime.running = False  # type: ignore[attr-defined]
+
+        def tracked_execute(*args: Any, **kwargs: Any) -> Any:
+            runtime.running = True  # type: ignore[attr-defined]
+            try:
+                return original_execute(*args, **kwargs)
+            finally:
+                runtime.running = False  # type: ignore[attr-defined]
+
+        runtime.execute = tracked_execute  # type: ignore[method-assign]
+
+    def observe(self) -> bool:
+        """Mark the app poisoned if the attached runtime is still executing."""
+        if self.runtime is not None and getattr(self.runtime, "running", False):
+            self.poisoned = True
+        return self.poisoned
+
+    def close_if_idle(self, runtime: PythonRuntime) -> None:
+        if getattr(runtime, "running", False):
+            self.poisoned = True
+            return
+        runtime.close()
+        if self.runtime is runtime:
+            self.runtime = None
+
+
 def _jsonable(value: Any) -> Any:
     """Make runtime values JSON-safe without turning every number into a string."""
     if value is None or isinstance(value, (str, bool, int)):
@@ -179,10 +222,12 @@ async def _run_chat(
     runtime_factory: RuntimeFactory,
     llm_func: LLMFunc,
     verifier_mode: str,
+    guard: RuntimeGuard,
     emit: Callable[[str, Any], None],
 ) -> dict[str, Any]:
     """Run one request on a fresh runtime and return the final event payload."""
     runtime = runtime_factory()
+    guard.attach(runtime)
     started = time.perf_counter()
     usage_before = snapshot_usage()
     try:
@@ -202,10 +247,31 @@ async def _run_chat(
                 verifier_mode=verifier_mode,
                 emit=emit,
             )
-            # Prefer the synthesis worker's comprehensive analytical narrative.
-            # If the verifier produced a short audit string, preserve the rich synthesis text for the user.
             synthesis_narrative = (pipeline.final_text_pre_verify or "").strip()
-            final_text = synthesis_narrative or pipeline.final_text
+            verifier_text = (pipeline.verifier_text or "").strip()
+
+            # The public final_text must agree with the public ANSWER. Keep the
+            # richer synthesis narrative only when the verifier left ANSWER
+            # unchanged; otherwise send the verifier's final text and expose the
+            # synthesis draft separately for the UI.
+            synthesis_draft = ""
+            if pipeline.verifier_changed_answer:
+                final_text = pipeline.final_text
+                if synthesis_narrative and synthesis_narrative != final_text:
+                    synthesis_draft = synthesis_narrative
+            else:
+                final_text = synthesis_narrative or pipeline.final_text
+
+            if pipeline.verifier_mode == "none":
+                verifier_status = "not_run"
+            elif pipeline.verifier_changed_answer:
+                verifier_status = "changed"
+            elif pipeline.verifier_mismatch:
+                verifier_status = "mismatch"
+            elif not verifier_text:
+                verifier_status = "failed"
+            else:
+                verifier_status = "confirmed"
 
             ok = pipeline.ok
             details: dict[str, Any] = {
@@ -215,10 +281,13 @@ async def _run_chat(
                 "total_calls": pipeline.total_calls,
                 "total_tokens": pipeline.total_tokens,
                 "verifier_mode": pipeline.verifier_mode,
+                "verifier_status": verifier_status,
                 "verifier_changed_answer": pipeline.verifier_changed_answer,
                 "verifier_mismatch": pipeline.verifier_mismatch,
+                "verifier_audit_text": verifier_text,
+                "answer_pre_verify": pipeline.answer_pre_verify,
+                "synthesis_draft": synthesis_draft,
                 "stall_count": pipeline.stall_count,
-                "verifier_audit_text": pipeline.final_text if pipeline.final_text != final_text else "",
             }
         else:
             result = await run_worker(
@@ -235,6 +304,10 @@ async def _run_chat(
                 "steps": result.steps,
                 "executions": result.executions,
                 "first_attempt_ok": result.first_attempt_ok,
+                "verifier_status": "not_run",
+                "verifier_audit_text": "",
+                "answer_pre_verify": None,
+                "synthesis_draft": "",
             }
 
         usage_after = snapshot_usage()
@@ -251,7 +324,7 @@ async def _run_chat(
             **details,
         }
     finally:
-        runtime.close()
+        guard.close_if_idle(runtime)
 
 
 async def _stream_chat(
@@ -262,6 +335,7 @@ async def _stream_chat(
     runtime_factory: RuntimeFactory,
     llm_func: LLMFunc,
     verifier_mode: str,
+    guard: RuntimeGuard,
     timeout_seconds: float,
     heartbeat_seconds: float,
 ):
@@ -298,6 +372,7 @@ async def _stream_chat(
                     runtime_factory=runtime_factory,
                     llm_func=llm_func,
                     verifier_mode=verifier_mode,
+                    guard=guard,
                     emit=emit_agent,
                 ),
                 timeout=timeout_seconds,
@@ -305,11 +380,15 @@ async def _stream_chat(
             emit_ui("final", result)
             emit_ui("done", {"ok": bool(result.get("ok")), "seconds": result.get("seconds")})
         except asyncio.TimeoutError:
+            poisoned = guard.observe()
+            message = f"Timed out after {timeout_seconds:g} s"
+            if poisoned:
+                message += "; runtime still executing, restart the server"
             emit_ui(
                 "error",
                 {
                     "type": "TimeoutError",
-                    "message": f"Timed out after {timeout_seconds:g} s",
+                    "message": message,
                 },
             )
             emit_ui("done", {"ok": False, "seconds": round(time.perf_counter() - started, 3)})
@@ -343,6 +422,8 @@ async def _stream_chat(
             task.cancel()
             with suppress(asyncio.CancelledError):
                 await task
+        # A client can disconnect while a worker thread is still executing.
+        guard.observe()
 
 
 def create_app(
@@ -352,6 +433,7 @@ def create_app(
     timeout_seconds: float = REQUEST_TIMEOUT_SECONDS,
     heartbeat_seconds: float = HEARTBEAT_SECONDS,
     verifier_mode: str = "overwrite",
+    preview_banner: bool = False,
 ) -> FastAPI:
     """Build the app; the keyword arguments are the fake-LLM test seam."""
     load_agent_env(scrub=True)
@@ -362,6 +444,7 @@ def create_app(
         version="0.1.0",
     )
     app.state.gate = BusyGate()
+    app.state.guard = RuntimeGuard()
     app.state.runtime_factory = runtime_factory
     app.state.llm_func = llm_func
     app.state.timeout_seconds = timeout_seconds
@@ -370,14 +453,23 @@ def create_app(
     if STATIC_DIR.is_dir():
         app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
-    @app.get("/", include_in_schema=False)
-    async def index() -> FileResponse:
+    @app.get("/", include_in_schema=False, response_model=None)
+    async def index() -> FileResponse | HTMLResponse:
+        if preview_banner:
+            html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+            banner = (
+                '<div class="preview-banner">SYNTHETIC DEMO DATA &mdash; '
+                "mock LLM, no live database run</div>"
+            )
+            return HTMLResponse(html.replace("<body>", "<body>\n  " + banner, 1))
         return FileResponse(STATIC_DIR / "index.html")
 
     @app.get("/api/health")
     async def health() -> dict[str, Any]:
+        degraded = app.state.guard.poisoned
         return {
-            "status": "ok",
+            "status": "degraded" if degraded else "ok",
+            "degraded": degraded,
             "busy": app.state.gate.busy,
             "arm_default": "single",
             "arms": ["single", "multi"],
@@ -385,8 +477,13 @@ def create_app(
             "timeout_seconds": timeout_seconds,
         }
 
-    @app.post("/api/chat")
-    async def chat(payload: ChatRequest, request: Request) -> StreamingResponse:
+    @app.post("/api/chat", response_model=None)
+    async def chat(payload: ChatRequest, request: Request) -> StreamingResponse | JSONResponse:
+        if app.state.guard.poisoned:
+            return JSONResponse(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                content={"error": "runtime still executing; restart the server"},
+            )
         lease = app.state.gate.try_acquire()
         if lease is None:
             raise HTTPException(
@@ -403,6 +500,7 @@ def create_app(
                     runtime_factory=app.state.runtime_factory,
                     llm_func=app.state.llm_func,
                     verifier_mode=app.state.verifier_mode,
+                    guard=app.state.guard,
                     timeout_seconds=app.state.timeout_seconds,
                     heartbeat_seconds=heartbeat_seconds,
                 ),

@@ -192,16 +192,21 @@
     }
   }
 
-  function resetOutput() {
+  function resetOutput(arm = "single") {
     traceEventsCount = 0;
     if (traceNavBadge) traceNavBadge.hidden = true;
     if (chartsNavBadge) chartsNavBadge.hidden = true;
 
+    const safeLabel = esc(
+      arm === "multi"
+        ? "Executing multi-agent pipeline via read-only runtime..."
+        : "Executing single-agent pipeline via read-only runtime..."
+    );
     answerEl.className = "answer-body empty";
     answerEl.innerHTML = `
       <div class="empty-state">
         <svg width="38" height="38" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
-        <p>Executing multi-agent pipeline via read-only runtime...</p>
+        <p>${safeLabel}</p>
       </div>
     `;
     answerMeta.replaceChildren();
@@ -248,6 +253,7 @@
       worker: "tag-worker",
       python: "tag-python",
       output: "tag-output",
+      verifier: "tag-plan",
       error: "tag-error"
     }[kind] || "tag-default";
     tag.className = `trace-tag ${tagClass}`;
@@ -284,6 +290,13 @@
     try { return JSON.stringify(value); } catch (_) { return String(value); }
   }
 
+  function esc(value) {
+    return String(value === null || value === undefined ? "" : value).replace(
+      /[&<>"']/g,
+      (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch])
+    );
+  }
+
   // Render Elegant Executive KPI Cards instead of raw JSON dict
   function renderExecutiveCards(answer) {
     if (!answer) return "";
@@ -296,15 +309,17 @@
         keys.forEach((key, idx) => {
           const val = answer[key];
           const isNum = typeof val === "number";
-          const cardClass = idx % 2 === 1 ? "kpi-card secondary" : "kpi-card";
+          const safeCardClass = idx % 2 === 1 ? "kpi-card secondary" : "kpi-card";
+          const safeKey = esc(key);
+          const safeValue = esc(isNum ? val.toLocaleString() : text(val));
+          const safeTag = esc(isNum ? "Calculated value" : "Answer attribute");
           cardsHtml += `
-            <div class="${cardClass}">
-              <div class="kpi-label">${key}</div>
+            <div class="${safeCardClass}">
+              <div class="kpi-label">${safeKey}</div>
               <div class="kpi-value-row">
-                <span class="kpi-num">${isNum ? val.toLocaleString() : val}</span>
-                ${isNum ? '<span class="kpi-unit">µg/m³</span>' : ''}
+                <span class="kpi-num">${safeValue}</span>
               </div>
-              <span class="kpi-tag">${isNum ? 'Calculated Baseline' : 'Verified Attribute'}</span>
+              <span class="kpi-tag">${safeTag}</span>
             </div>
           `;
         });
@@ -313,31 +328,35 @@
       }
     }
 
-    // Single scalar number
+    // Single scalar number. No unit is invented here; only the payload may
+    // carry one, and the current API payload has no unit field.
     if (typeof answer === "number") {
+      const safeNumber = esc(answer.toLocaleString());
       return `
         <div class="kpi-grid">
           <div class="kpi-card">
             <div class="kpi-label">Computed Result</div>
             <div class="kpi-value-row">
-              <span class="kpi-num">${answer.toLocaleString()}</span>
+              <span class="kpi-num">${safeNumber}</span>
             </div>
-            <span class="kpi-tag">Verified Aggregate</span>
+            <span class="kpi-tag">Calculated value</span>
           </div>
         </div>
       `;
     }
 
     // Default formatted tag
-    return `<div class="kpi-tag" style="font-size:0.85rem; padding: 4px 10px; margin-bottom: 0.8rem;">ANSWER: ${text(answer)}</div>`;
+    const safeAnswer = esc(text(answer));
+    return `<div class="kpi-tag" style="font-size:0.85rem; padding: 4px 10px; margin-bottom: 0.8rem;">ANSWER: ${safeAnswer}</div>`;
   }
 
-  // Convert simple markdown headings and bold text into styled HTML
+  // Convert simple markdown headings and bold text into styled HTML. Escape
+  // the model/DB text first so the only HTML in the result is the small set of
+  // tags added by these regex replacements.
   function formatAnalysisText(rawText) {
     if (!rawText) return "<p>(No analysis generated)</p>";
-    
-    // Process markdown headings (### Heading)
-    let formatted = rawText
+
+    let formatted = esc(rawText)
       .replace(/^### (.*$)/gim, '<h4 class="analysis-subheading">$1</h4>')
       .replace(/^## (.*$)/gim, '<h3 class="analysis-heading">$1</h3>')
       .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
@@ -348,22 +367,75 @@
     formatted = formatted.replace(/(<li.*<\/li>)/gms, '<ul class="analysis-list">$1</ul>');
 
     // Split paragraphs
-    const paragraphs = formatted.split(/\n\n+/).map(p => {
+    return formatted.split(/\n\n+/).map(p => {
       p = p.trim();
       if (!p) return "";
       if (p.startsWith("<h") || p.startsWith("<ul")) return p;
-      return `<p class="analysis-p">${p}</p>`;
+      return '<p class="analysis-p">' + p + '</p>';
     }).join("");
+  }
 
-    return paragraphs;
+  function verifierDisplay(data) {
+    if (data.arm !== "multi") {
+      return { label: "Single agent - no verifier", className: "chip-neutral", ok: false };
+    }
+    const status = data.verifier_status || "unknown";
+    if (status === "not_run") {
+      return { label: "Verifier not run", className: "chip-neutral", ok: false };
+    }
+    if (status === "changed") {
+      return { label: "Verifier changed stored answer", className: "chip-neutral", ok: false };
+    }
+    if (status === "mismatch") {
+      return { label: "Verifier reported mismatch", className: "chip-neutral", ok: false };
+    }
+    if (status === "failed") {
+      return { label: "Verifier failed", className: "chip-neutral", ok: false };
+    }
+    if (status === "confirmed") {
+      return { label: "Verifier confirmed stored answer", className: "chip-success", ok: true };
+    }
+    return { label: "Verifier outcome unknown", className: "chip-neutral", ok: false };
+  }
+
+  function renderVerifierBanner(data) {
+    if (data.arm !== "multi") return "";
+    if (data.verifier_status === "changed") {
+      if (data.verifier_mode === "flag") {
+        return '<div class="verifier-banner">Verifier changed the stored answer during audit; flag mode kept the synthesis answer.</div>';
+      }
+      const safeBefore = esc(text(data.answer_pre_verify));
+      const safeAfter = esc(text(data.answer));
+      const safeBannerText = "Verifier changed the stored answer: " + safeBefore + " &rarr; " + safeAfter;
+      return '<div class="verifier-banner">' + safeBannerText + '</div>';
+    }
+    if (data.verifier_status === "mismatch") {
+      return '<div class="verifier-banner">Verifier reported a mismatch. Review this result before use.</div>';
+    }
+    if (data.verifier_status === "failed") {
+      return '<div class="verifier-banner">Verifier did not complete; the answer is unverified synthesis output.</div>';
+    }
+    return "";
   }
 
   function showAnswer(data) {
     answerEl.className = "answer-body";
     answerEl.replaceChildren();
 
-    const answerHtml = renderExecutiveCards(data.answer);
-    const formattedAnalysis = formatAnalysisText(data.final_text);
+    const verifier = verifierDisplay(data);
+    const safeAnswerHtml = renderExecutiveCards(data.answer);
+    const safeAnalysisHtml = formatAnalysisText(data.final_text);
+    const safeChipClass = esc(verifier.className);
+    const safeChipLabel = esc(verifier.label);
+    const safeChipIcon = verifier.ok
+      ? '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>'
+      : '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="9"/><path d="M12 8v5"/><path d="M12 16h.01"/></svg>';
+    const safeVerifierBanner = renderVerifierBanner(data);
+    const safeDraftHtml = data.synthesis_draft
+      ? '<details class="synthesis-draft"><summary>Synthesis draft (pre-verifier, not final)</summary><div class="analysis-prose">' +
+        formatAnalysisText(data.synthesis_draft) +
+        '</div></details>'
+      : "";
 
     const container = document.createElement("div");
     container.innerHTML = `
@@ -372,19 +444,23 @@
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
           Atmospheric & Environmental Assessment
         </span>
-        <span class="chip chip-success">
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
-          ${data.arm === "multi" ? "DB Verified (6-Agent Swarm)" : "DB Runtime Verified"}
+        <span class="chip ${safeChipClass}">
+          ${safeChipIcon}
+          ${safeChipLabel}
         </span>
       </div>
 
+      ${safeVerifierBanner}
+
       <!-- Key Numerical Metric Cards -->
-      ${answerHtml}
+      ${safeAnswerHtml}
 
       <!-- Detailed Analytical Narrative -->
       <div class="analysis-prose">
-        ${formattedAnalysis}
+        ${safeAnalysisHtml}
       </div>
+
+      ${safeDraftHtml}
     `;
     answerEl.appendChild(container);
 
@@ -498,7 +574,7 @@
         // Ensure strictly ONE return packet per worker execution
         if (activeRole && !roleHasReturned) {
           roleHasReturned = true;
-          const retLabel = activeRole === "verifier" ? "CONFIRMED: Verified" : "RETURNS: runtime_vars";
+          const retLabel = activeRole === "verifier" ? "RETURNS: audit" : "RETURNS: runtime_vars";
           await animatePacket(activeRole, "coordinator", retLabel, true);
         }
         break;
@@ -508,6 +584,9 @@
         activeRole = null;
         roleHasReturned = false;
         if (matrixOverlay) matrixOverlay.classList.remove("active");
+        if (data.verifier_audit_text) {
+          addTrace("verifier", data.verifier_audit_text);
+        }
         showAnswer(data);
         renderCharts(data.charts);
         setStatus(data.ok ? "Ready" : "Warning", data.ok ? "active" : "error");
@@ -566,7 +645,7 @@
     const armInput = document.querySelector("input[name='arm']:checked");
     const armValue = armInput ? armInput.value : "multi";
 
-    resetOutput();
+    resetOutput(armValue);
     setRunning(true, armValue === "multi");
     setStatus("Connecting...", "running");
 

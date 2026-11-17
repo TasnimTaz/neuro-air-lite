@@ -11,6 +11,8 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import threading
+import time
 
 from fastapi.testclient import TestClient
 
@@ -49,6 +51,18 @@ class TrackingRuntime(PythonRuntime):
     def close(self) -> None:
         self.closed = True
         super().close()
+
+
+class BlockingRuntime(PythonRuntime):
+    """A runtime whose execute call outlives the HTTP timeout."""
+
+    def __init__(self, release: threading.Event) -> None:
+        super().__init__(variables={"charts": EChartsConfigManager()})
+        self.release = release
+
+    def execute(self, code: str, first_attempt: bool = True):
+        self.release.wait(timeout=5.0)
+        return super().execute(code, first_attempt=first_attempt)
 
 
 def _factory() -> PythonRuntime:
@@ -105,6 +119,17 @@ MULTI_RESPONSES = [
     "Verified: 42.",
 ]
 
+MULTI_CHANGED_RESPONSES = [
+    '[{"role": "data_acquisition", "task": "stage 41"}, '
+    '{"role": "synthesis_report", "task": "answer"}]',
+    "```python\nstaged = 41\nprint(staged)\n```",
+    "staged value ready",
+    "```python\nANSWER = staged + 1\nprint(ANSWER)\n```",
+    "The answer is 42.",
+    "```python\nprint('correcting')\nANSWER = 43\nprint(ANSWER)\n```",
+    "Verifier final: 43.",
+]
+
 
 def test_single_arm_is_default_and_streams_final_with_charts():
     app, client = _client(ScriptedLLM(SINGLE_RESPONSES))
@@ -159,7 +184,38 @@ def test_multi_arm_emits_a_plan_and_runs_the_verifier():
     assert final["answer"] == 42
     assert final["plan_source"] == "llm"
     assert final["verifier_mode"] == "overwrite"
+    assert final["verifier_status"] == "confirmed"
     assert final["verifier_changed_answer"] is False
+    assert final["answer_pre_verify"] == 42
+    assert final["synthesis_draft"] == ""
+    assert final["final_text"] == "The answer is 42."
+    assert final["verifier_audit_text"] == "Verified: 42."
+
+
+def test_multi_arm_keeps_final_text_consistent_when_verifier_changes_answer():
+    _, client = _client(ScriptedLLM(MULTI_CHANGED_RESPONSES))
+    response = client.post("/api/chat", json={"query": "demo question", "arm": "multi"})
+
+    assert response.status_code == 200
+    final = next(data for name, data in _events(response.text) if name == "final")
+
+    assert final["answer"] == 43
+    assert final["answer_pre_verify"] == 42
+    assert final["verifier_status"] == "changed"
+    assert final["verifier_changed_answer"] is True
+    assert final["final_text"] == "Verifier final: 43."
+    assert final["synthesis_draft"] == "The answer is 42."
+    assert final["verifier_audit_text"] == "Verifier final: 43."
+
+
+def test_preview_banner_is_served_only_when_enabled():
+    app = create_app(
+        runtime_factory=_factory,
+        llm_func=ScriptedLLM([]),
+        preview_banner=True,
+    )
+    client = TestClient(app)
+    assert "SYNTHETIC DEMO DATA" in client.get("/").text
 
 
 def test_query_alias_and_validation():
@@ -218,6 +274,43 @@ def test_timeout_emits_an_error_instead_of_hanging():
     assert done["ok"] is False
 
 
+def test_timeout_poisons_app_while_runtime_thread_is_still_executing():
+    release = threading.Event()
+    app, client = _client(
+        ScriptedLLM(SINGLE_RESPONSES),
+        runtime_factory=lambda: BlockingRuntime(release),
+        timeout_seconds=0.05,
+        heartbeat_seconds=0.01,
+    )
+    try:
+        response = client.post("/api/chat", json={"query": "blocked"})
+        assert response.status_code == 200
+        events = _events(response.text)
+        error = next(data for name, data in events if name == "error")
+        assert error["type"] == "TimeoutError"
+        assert "runtime still executing" in error["message"]
+
+        health = client.get("/api/health")
+        assert health.status_code == 200
+        assert health.json()["degraded"] is True
+        assert health.json()["status"] == "degraded"
+
+        blocked = client.post("/api/chat", json={"query": "again"})
+        assert blocked.status_code == 503
+        assert blocked.json() == {
+            "error": "runtime still executing; restart the server"
+        }
+
+        # Releasing the worker thread does not clear the poison; only a process
+        # restart does, because the runtime was used after its request ended.
+        release.set()
+        time.sleep(0.1)
+        assert client.get("/api/health").json()["degraded"] is True
+        assert client.post("/api/chat", json={"query": "again"}).status_code == 503
+    finally:
+        release.set()
+
+
 def test_each_request_gets_and_closes_its_own_runtime():
     created: list[TrackingRuntime] = []
 
@@ -259,5 +352,6 @@ def test_static_ui_and_health_are_served():
     health = client.get("/api/health")
     assert health.status_code == 200
     assert health.json()["status"] == "ok"
+    assert health.json()["degraded"] is False
     assert health.json()["arm_default"] == "single"
     assert health.json()["busy"] is False

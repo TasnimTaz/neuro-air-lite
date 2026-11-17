@@ -81,6 +81,19 @@
       background: var(--green);
       box-shadow: 0 0 10px var(--green);
     }
+    .preview-banner {
+      background: #7f1d1d;
+      color: #fff;
+      font-family: var(--font-mono);
+      font-size: 0.78rem;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      padding: 0.65rem 1rem;
+      position: sticky;
+      text-align: center;
+      top: 0;
+      z-index: 1000;
+    }
 
     .view-container {
       position: relative;
@@ -502,6 +515,8 @@
 </head>
 <body>
 
+  <div class="preview-banner">SYNTHETIC DEMO DATA — fixed mock values, no live database run</div>
+
   <header>
     <div class="logo">
       <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#38bdf8" stroke-width="2.5"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
@@ -802,9 +817,9 @@
       setActiveNode('verifier', true);
       hudText.innerText = "DB Verifier: Executing independent SQL on read-only PostgreSQL role...";
       await new Promise(r => setTimeout(r, 1300));
-      hudText.innerText = "DB Verifier: Match confirmed (Calculated = 54.6, Stored = 54.6). Verified!";
-      // Send single verified confirmation packet back to coordinator
-      await animatePacket('verifier', 'coordinator', 'CONFIRMED: Verified', true);
+      hudText.innerText = "Synthetic Demo Verifier: fixed demo values only; no live DB check.";
+      // Send a single synthetic demo packet back to coordinator
+      await animatePacket('verifier', 'coordinator', 'DEMO: synthetic', true);
       setActiveNode('verifier', false);
       setActiveNode('coordinator', false);
 
@@ -814,7 +829,7 @@
       await new Promise(r => setTimeout(r, 1000));
 
       matrix.classList.remove('active');
-      document.getElementById('header-status').innerText = 'Complete (All 6 Verified)';
+      document.getElementById('header-status').innerText = 'Demo complete (synthetic)';
 
       renderFullIncidentResult();
     }
@@ -831,7 +846,7 @@
           </div>
           <span class="verified-badge">
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>
-            DB Verified · 6 Agents
+            SYNTHETIC DEMO · 6 Agents
           </span>
         </div>
 
