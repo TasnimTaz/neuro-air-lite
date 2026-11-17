@@ -72,7 +72,8 @@ schema prompt on Day 4. Raise it once per machine and restart `ollama serve`:
 core/                 llm client, python runtime, orchestrator, prompts, gate
 domains/hk/           schema, schema prompt, tools, charts, knowledge base
 ingest/               one idempotent script per data source
-api/                  FastAPI app, SSE stream, monitoring daemon, static UI
+api/                  FastAPI app, SSE stream, static UI
+analysis/             deterministic Tai Po reference and drift daemon
 evals/                baseline cases, leakage guard, reproducible runner
 tests/                pytest
 scripts/              environment check and one-off utilities
@@ -329,10 +330,9 @@ pass rate, first-attempt rate, mean steps, mean latency and tokens.
 | 2 | max NO2 at Causeway Bay, Nov 2025 | 211.70 ug/m3 |
 | 3 | mean AQHI at Central, Jun 2025 | 2.45 |
 | 4 | hours PM2.5 > 50 at Yuen Long, 2025 | 163 |
-| 5 | coordinator, workers, verifier | implemented; official 3-repeat 41/60 vs single 46/60 (p=0.109; 5.21x tokens) - no gain |
-| 6 | relevance gate, knowledge retrieval, verifier tuning | implemented offline; live calibration and prefix-aware premise traps still pending |
-| 7 | FastAPI SSE API and ECharts demo UI | implemented; 201 tests pass; timeout-poison 503 guard added; live demo deferred |
-| 8 | deterministic Tai Po reference, daemon | not started |
+| 5 | mean wind speed at `wx_taipo`, Nov 2025 | 2.51 m/s |
+| 6 | max wind gust at `wx_tapmun`, 2025 | 42.78 m/s |
+| 7 | mean temperature at `wx_shatin`, Aug 2025 | 27.48 C |
 | 8 | `EDUCATIONAL_INSTITUTION` within 1500 m of Tai Po | 53 |
 | 9 | mean O3 at Tung Chung, Oct 2025 | 58.94 ug/m3 |
 | 10 | `ROADSIDE` station count | 3 |
@@ -470,8 +470,7 @@ the same questions and SQL as three v1 cases:
 
 | v1 case | Contaminated example | What was duplicated |
 | --- | --- | --- |
-| 7 | FastAPI SSE API and ECharts demo UI | implemented; 201 tests pass; timeout-poison 503 guard added; live demo deferred |
-| 8 | deterministic Tai Po reference, daemon | not started |
+| 7 | old example 2 | geocode HKU -> nearest air-quality station |
 | 8 | old example 3 | places of worship within 2 km of Yuen Long |
 | 12 | old example 4 | days with Yuen Long daily PM2.5 above the current AQO |
 
@@ -581,10 +580,9 @@ repository alone.
 | 2 | retrieval | simple | yes | 3/3 |
 | 3 | retrieval | medium | no | 3/3 |
 | 4 | retrieval | simple | no | 3/3 |
-| 5 | coordinator, workers, verifier | implemented; official 3-repeat 41/60 vs single 46/60 (p=0.109; 5.21x tokens) - no gain |
-| 6 | relevance gate, knowledge retrieval, verifier tuning | implemented offline; live calibration and prefix-aware premise traps still pending |
-| 7 | FastAPI SSE API and ECharts demo UI | implemented; 201 tests pass; timeout-poison 503 guard added; live demo deferred |
-| 8 | deterministic Tai Po reference, daemon | not started |
+| 5 | temporal | medium | no | 1/3 |
+| 6 | temporal | medium | yes | 3/3 |
+| 7 | temporal | medium | no | 3/3 |
 | 8 | temporal | simple | no | 3/3 |
 | 9 | spatial | medium | no | 3/3 |
 | 10 | spatial | medium | no | 3/3 |
@@ -1045,6 +1043,53 @@ The live browser demo is deliberately **not run yet**: the background verifier
 mode evaluation is still using the local Ollama model, and live queries would
 distort its latency measurements.
 
+## Day 8: deterministic Tai Po reference and daemon
+
+`analysis/tai_po_reference.py` is the non-LLM reference for the Wang Fuk Court,
+Tai Po fire case. It runs fixed SQL against the read-only role, issues
+`SET TRANSACTION READ ONLY` on its connection as a second guard, and compares
+the observed values with the sanity values used by `scripts/check_data.py`:
+
+```powershell
+uv run python -m analysis.tai_po_reference --compact
+```
+
+The snapshot includes:
+
+| Reference check | Observed |
+| --- | ---: |
+| Tai Po NO2 at 2025-11-26 20:00 | 123.2 ug/m3 |
+| Tai Po AQHI at 2025-11-26 20:00 | 5 (MODERATE) |
+| PM2.5 24 h post-fire peak | 54.6 ug/m3 |
+| PM2.5 pre-fire mean | 26.675 ug/m3 |
+| NO2 24 h post-fire peak | 123.2 ug/m3 |
+| NO2 pre-fire mean | 48.903 ug/m3 |
+| Wind at 2025-11-26 20:00 | 0.389 m/s from 207 deg (SW) |
+| Educational sensitive areas, 1.5 km from fire site | 45 |
+| Educational sensitive areas, 1.5 km from Tai Po station | 53 |
+| OSM buildings, 2 km from fire site | 4,434 |
+| Residential OSM buildings, 1.5 km from fire site | 1,153 |
+
+The last four rows are **snapshot screening counts**, not paper reproductions.
+The paper's 1,090 total / 293 residential OSM counts are from a different
+snapshot/filter, and the fire-site-centred school count (45) differs from the
+station-centred `check_agent` truth (53). Both are kept explicit in the JSON.
+The 54.6 ug/m3 value is an hourly peak inside the 24 h window, so comparing it
+with the 24 h AQO (37.5 ug/m3) or WHO guideline (15 ug/m3) is a screening
+comparison, not a legal compliance determination.
+
+`analysis/daemon.py` is a foreground drift monitor. It creates and disposes a
+read-only engine per check, reports a database error as `degraded` without
+crashing, and prints one JSON object per line:
+
+```powershell
+uv run python -m analysis.daemon --once
+uv run python -m analysis.daemon --interval 300
+```
+
+It writes no files and no database rows. It is not the Day 10 execution
+isolation boundary.
+
 ## Conventions
 
 - The agent only ever connects with the read-only `neuro_ro` role. Ingestion
@@ -1094,5 +1139,5 @@ distort its latency measurements.
 | 5 | coordinator, workers, verifier | implemented; official 3-repeat 41/60 vs single 46/60 (p=0.109; 5.21x tokens) - no gain |
 | 5b | matched-budget multi audit, verifier modes, v3 prompt | v3 rerun done: 40/60 multi vs 45/60 single (p=0.289) - negative; flag 12/42 complete, none incomplete (21/42), strong API stopped because all `*_STRONG` variables are unset |
 | 6 | relevance gate, knowledge retrieval, verifier tuning | implemented offline; live calibration and prefix-aware premise traps still pending |
-| 7 | FastAPI SSE API and ECharts demo UI | implemented; 201 tests pass; timeout-poison 503 guard added; live demo deferred |
-| 8 | deterministic Tai Po reference, daemon | not started |
+| 7 | FastAPI SSE API and ECharts demo UI | implemented; 209 tests pass; timeout-poison 503 guard added; live demo deferred |
+| 8 | deterministic Tai Po reference, daemon | implemented; read-only reference and daemon drift check verified, live demo deferred |
