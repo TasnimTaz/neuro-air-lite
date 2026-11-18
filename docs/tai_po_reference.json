@@ -1,0 +1,393 @@
+{
+  "name": "tai_po_fire_reference",
+  "generated_at": "2026-11-18T13:16:14+00:00",
+  "ok": true,
+  "degraded": false,
+  "station_code": "taipo",
+  "fire_site": {
+    "latitude": 22.4468,
+    "longitude": 114.1754,
+    "label": "Wang Fuk Court, Tai Po"
+  },
+  "windows": {
+    "peak_hour": "2025-11-26 20:00",
+    "pre_fire": [
+      "2025-11-23 14:00",
+      "2025-11-26 15:00"
+    ],
+    "post_fire_24h": [
+      "2025-11-26 15:00",
+      "2025-11-27 15:00"
+    ]
+  },
+  "thresholds": {
+    "hk_aqo_pm25_24h": 37.5,
+    "hk_aqo_no2_1h": 200.0,
+    "who_pm25_24h": 15.0,
+    "who_no2_24h": 25.0,
+    "unit": "ug/m3",
+    "note": "The 54.6 ug/m3 PM2.5 value is an hourly peak inside the 24 h window; comparing it with a 24 h AQO or WHO guideline is a screening comparison, not a legal compliance determination."
+  },
+  "observed": {
+    "no2_at_2000": 123.2,
+    "aqhi_at_2000": 5,
+    "pm25_post_peak": 54.6,
+    "pm25_pre_mean": 26.67534246575343,
+    "no2_post_peak": 123.2,
+    "no2_pre_mean": 48.90277777777778,
+    "wind_speed_2000": 0.389,
+    "wind_degree_2000": 206.56505117707798,
+    "wind_direction_2000": "SW",
+    "sensitive_education_fire_1500": 45,
+    "sensitive_health_fire_1500": 1,
+    "sensitive_worship_fire_1500": 50,
+    "sensitive_education_station_1500": 53,
+    "buildings_2km": 4434,
+    "residential_1500": 1153,
+    "buildings_25km": 5661,
+    "pm25_at_2000": 35.7,
+    "pm25_post_mean": 25.604166666666668,
+    "pm25_post_n": 24,
+    "no2_post_mean": 54.182608695652156,
+    "no2_post_n": 23,
+    "aqhi_post_peak": 6,
+    "wind_gust_2000": 1.389,
+    "temperature_2000": 16.2,
+    "humidity_2000": 59.0,
+    "pressure_2000": 1019.7,
+    "sensitive_worship_station_1500": 70,
+    "sensitive_health_station_1500": 1,
+    "matched_hour_z": 1.9105711321474819,
+    "matched_hour_max_prev_14d": 125.5,
+    "network_mean_rise": 19.56411872441285,
+    "nearest_station_rise_vs_network": 7.4018357258169125,
+    "pm25_rank_of_nearest": 1
+  },
+  "expected": {
+    "no2_at_2000": 123.2,
+    "aqhi_at_2000": 5,
+    "pm25_post_peak": 54.6,
+    "pm25_pre_mean": 26.68,
+    "no2_post_peak": 123.2,
+    "no2_pre_mean": 48.9,
+    "wind_speed_2000": 0.389,
+    "wind_degree_2000": 207.0,
+    "wind_direction_2000": "SW",
+    "sensitive_education_fire_1500": 45,
+    "sensitive_health_fire_1500": 1,
+    "sensitive_worship_fire_1500": 50,
+    "sensitive_education_station_1500": 53,
+    "buildings_2km": 4434,
+    "residential_1500": 1153,
+    "buildings_25km": 5661,
+    "matched_hour_z": 1.9,
+    "matched_hour_max_prev_14d": 125.5,
+    "network_mean_rise": 19.6,
+    "nearest_station_rise_vs_network": 7.4,
+    "pm25_rank_of_nearest": 1
+  },
+  "anomaly_assessment": {
+    "raw_ratio": 2.5192842942345925,
+    "raw_ratio_pollutant": "NO2",
+    "raw_ratio_by_pollutant": {
+      "NO2": 2.5192842942345925,
+      "PM2.5": 2.04683407795409
+    },
+    "matched_hour_z": 1.9105711321474819,
+    "matched_hour_mean": 53.42857142857143,
+    "matched_hour_sd": 36.5186238802873,
+    "matched_hour_n": 14,
+    "matched_hour_max_prev_14d": 125.5,
+    "network_mean_rise": 19.56411872441285,
+    "network_mean_rise_pollutant": "NO2",
+    "network_mean_rise_other_17": 19.56411872441285,
+    "network_mean_rise_all_18": 21.09468355718357,
+    "nearest_station_no2_rise": 47.11428571428572,
+    "nearest_station_pm25_rise": 17.44642857142857,
+    "network_pm25_mean_rise_other_17": 10.044592845611657,
+    "nearest_station_rise_vs_network": 7.4018357258169125,
+    "nearest_station_rise_vs_network_pollutant": "PM2.5",
+    "pm25_rank_of_nearest": 1,
+    "pm25_station_count": 18,
+    "event_evening": [
+      "2025-11-26 18:00",
+      "2025-11-27 00:00"
+    ],
+    "baseline_window": [
+      "2025-11-12",
+      "2025-11-25"
+    ],
+    "supports_local_plume": "false",
+    "rule": "false when (matched_hour_z < 2.0 or event NO2 peak <= the preceding 14-day matched-hour maximum) and the other-17-station mean NO2 rise is >= 10 ug/m3; true only when z >= 2.0, the event peak exceeds the preceding maximum, the network mean rise is < 5 ug/m3, and the nearest-station PM2.5 excess is >= 5 ug/m3; otherwise indeterminate",
+    "caveat": "The peak-to-mean ratio is a screening signal, not causal attribution. The matched-hour z-score, the territory-wide network contrast and the near-calm wind do not support a single-source plume."
+  },
+  "checks": [
+    {
+      "key": "no2_at_2000",
+      "label": "NO2 at 2025-11-26 20:00",
+      "observed": 123.2,
+      "expected": 123.2,
+      "tolerance": 0.05,
+      "ok": true,
+      "unit": "ug/m3",
+      "source": "paper sanity / scripts/check_data.py",
+      "note": ""
+    },
+    {
+      "key": "aqhi_at_2000",
+      "label": "AQHI at 2025-11-26 20:00",
+      "observed": 5,
+      "expected": 5,
+      "tolerance": 0,
+      "ok": true,
+      "unit": "",
+      "source": "paper sanity / scripts/check_data.py",
+      "note": ""
+    },
+    {
+      "key": "pm25_post_peak",
+      "label": "PM2.5 peak, 24 h post-fire window",
+      "observed": 54.6,
+      "expected": 54.6,
+      "tolerance": 0.05,
+      "ok": true,
+      "unit": "ug/m3",
+      "source": "paper sanity / scripts/check_data.py",
+      "note": "Hourly peak; compare with a 24 h AQO only as a screening check."
+    },
+    {
+      "key": "pm25_pre_mean",
+      "label": "PM2.5 pre-fire mean",
+      "observed": 26.67534246575343,
+      "expected": 26.68,
+      "tolerance": 0.01,
+      "ok": true,
+      "unit": "ug/m3",
+      "source": "paper sanity / scripts/check_data.py",
+      "note": ""
+    },
+    {
+      "key": "no2_post_peak",
+      "label": "NO2 peak, 24 h post-fire window",
+      "observed": 123.2,
+      "expected": 123.2,
+      "tolerance": 0.05,
+      "ok": true,
+      "unit": "ug/m3",
+      "source": "paper sanity / scripts/check_data.py",
+      "note": ""
+    },
+    {
+      "key": "no2_pre_mean",
+      "label": "NO2 pre-fire mean",
+      "observed": 48.90277777777778,
+      "expected": 48.9,
+      "tolerance": 0.01,
+      "ok": true,
+      "unit": "ug/m3",
+      "source": "paper sanity / scripts/check_data.py",
+      "note": ""
+    },
+    {
+      "key": "wind_speed_2000",
+      "label": "Wind speed at 2025-11-26 20:00",
+      "observed": 0.389,
+      "expected": 0.389,
+      "tolerance": 0.001,
+      "ok": true,
+      "unit": "m/s",
+      "source": "paper sanity / scripts/check_data.py",
+      "note": ""
+    },
+    {
+      "key": "wind_degree_2000",
+      "label": "Wind bearing at 2025-11-26 20:00",
+      "observed": 206.56505117707798,
+      "expected": 207.0,
+      "tolerance": 0.5,
+      "ok": true,
+      "unit": "degrees",
+      "source": "paper sanity / scripts/check_data.py",
+      "note": "Database value is 206.565 degrees; the paper rounds to 207."
+    },
+    {
+      "key": "wind_direction_2000",
+      "label": "Wind compass direction at 2025-11-26 20:00",
+      "observed": "SW",
+      "expected": "SW",
+      "tolerance": null,
+      "ok": true,
+      "unit": "",
+      "source": "paper sanity / scripts/check_data.py",
+      "note": ""
+    },
+    {
+      "key": "sensitive_education_fire_1500",
+      "label": "Educational sensitive areas within 1.5 km of the fire site",
+      "observed": 45,
+      "expected": 45,
+      "tolerance": 0,
+      "ok": true,
+      "unit": "count",
+      "source": "sensitive_area / 2026 snapshot",
+      "note": "Fire-site-centred count; the station-centred check_agent truth is 53."
+    },
+    {
+      "key": "sensitive_health_fire_1500",
+      "label": "Health-care sensitive areas within 1.5 km of the fire site",
+      "observed": 1,
+      "expected": 1,
+      "tolerance": 0,
+      "ok": true,
+      "unit": "count",
+      "source": "sensitive_area / 2026 snapshot",
+      "note": ""
+    },
+    {
+      "key": "sensitive_worship_fire_1500",
+      "label": "Places of worship within 1.5 km of the fire site",
+      "observed": 50,
+      "expected": 50,
+      "tolerance": 0,
+      "ok": true,
+      "unit": "count",
+      "source": "sensitive_area / 2026 snapshot",
+      "note": ""
+    },
+    {
+      "key": "sensitive_education_station_1500",
+      "label": "Educational sensitive areas within 1.5 km of the Tai Po station",
+      "observed": 53,
+      "expected": 53,
+      "tolerance": 0,
+      "ok": true,
+      "unit": "count",
+      "source": "check_agent #8",
+      "note": "Station-centred count, not the fire-site count."
+    },
+    {
+      "key": "buildings_2km",
+      "label": "OSM buildings within 2 km of the fire site",
+      "observed": 4434,
+      "expected": 4434,
+      "tolerance": 0,
+      "ok": true,
+      "unit": "count",
+      "source": "osm_feature / 2026 snapshot",
+      "note": "Proximity screening count; not the paper's 1,090 buildings."
+    },
+    {
+      "key": "residential_1500",
+      "label": "Residential OSM buildings within 1.5 km of the fire site",
+      "observed": 1153,
+      "expected": 1153,
+      "tolerance": 0,
+      "ok": true,
+      "unit": "count",
+      "source": "osm_feature / 2026 snapshot",
+      "note": "Proximity screening count; not the paper's 293 residential buildings."
+    },
+    {
+      "key": "buildings_25km",
+      "label": "OSM buildings within 2.5 km of the fire site",
+      "observed": 5661,
+      "expected": 5661,
+      "tolerance": 0,
+      "ok": true,
+      "unit": "count",
+      "source": "osm_feature / 2026 snapshot",
+      "note": "The ingest AOI radius; proximity screening only."
+    },
+    {
+      "key": "matched_hour_z",
+      "label": "Tai Po NO2 at 20:00 vs its 14-day matched-hour baseline (z)",
+      "observed": 1.9105711321474819,
+      "expected": 1.9,
+      "tolerance": 0.05,
+      "ok": true,
+      "unit": "z",
+      "source": "paper main text / Supplementary Note 3",
+      "note": "Sample standard deviation (ddof=1), same 20:00 hour on 12-25 Nov 2025."
+    },
+    {
+      "key": "matched_hour_max_prev_14d",
+      "label": "Maximum Tai Po NO2 at 20:00 over the preceding 14 days",
+      "observed": 125.5,
+      "expected": 125.5,
+      "tolerance": 0.05,
+      "ok": true,
+      "unit": "ug/m3",
+      "source": "paper main text / Supplementary Note 3",
+      "note": "A non-fire evening reached this value; the fire-evening peak was 123.2."
+    },
+    {
+      "key": "network_mean_rise",
+      "label": "Territory-wide NO2 rise over the event evening, other 17 stations",
+      "observed": 19.56411872441285,
+      "expected": 19.6,
+      "tolerance": 0.05,
+      "ok": true,
+      "unit": "ug/m3",
+      "source": "paper main text / Supplementary Note 3",
+      "note": "Event evening 18:00-23:00 minus the same clock-hours on 12-25 Nov."
+    },
+    {
+      "key": "nearest_station_rise_vs_network",
+      "label": "Tai Po PM2.5 rise above the other-17-station mean rise",
+      "observed": 7.4018357258169125,
+      "expected": 7.4,
+      "tolerance": 0.05,
+      "ok": true,
+      "unit": "ug/m3",
+      "source": "paper main text / Supplementary Note 3",
+      "note": "Paper reports the nearest station as first of 18 for PM2.5 elevation."
+    },
+    {
+      "key": "pm25_rank_of_nearest",
+      "label": "Tai Po PM2.5 evening-elevation rank among the 18 stations",
+      "observed": 1,
+      "expected": 1,
+      "tolerance": 0,
+      "ok": true,
+      "unit": "rank",
+      "source": "paper main text / Supplementary Note 3",
+      "note": "Rank 1 of 18; larger rises rank first."
+    }
+  ],
+  "nearest_sensitive": [
+    {
+      "name": "Hong Kong Sheng Kung Hui Church of Our Saviour",
+      "category": "PLACE_OF_WORSHIP",
+      "distance_m": 212.3
+    },
+    {
+      "name": "SKH Yuen Chen Maun Chen Primary School",
+      "category": "EDUCATIONAL_INSTITUTION",
+      "distance_m": 229.1
+    },
+    {
+      "name": "CCC Fung Leung Kit Memorial Secondary School",
+      "category": "EDUCATIONAL_INSTITUTION",
+      "distance_m": 258.3
+    },
+    {
+      "name": "Tai Wong Yeh Temple",
+      "category": "PLACE_OF_WORSHIP",
+      "distance_m": 303.9
+    },
+    {
+      "name": "Wong Shiu Chi Secondary School",
+      "category": "EDUCATIONAL_INSTITUTION",
+      "distance_m": 412.4
+    }
+  ],
+  "notes": [
+    "Read-only database reference; no LLM and no database writes.",
+    "The peak-to-mean ratio is a screening signal, not causal attribution. The matched-hour z-score, the territory-wide network contrast and the near-calm wind do not support a single-source plume.",
+    "Matched-hour baseline: Tai Po NO2 at 20:00 on 2025-11-26 against the same clock hour on the 14 preceding days (2025-11-12 to 2025-11-25), using the sample standard deviation (ddof=1).",
+    "Network contrast: each station's mean over the event evening (2025-11-26 18:00-23:00) minus its mean over the same clock-hours on the 14 preceding days; the network mean uses the other 17 stations.",
+    "OSM building counts are proximity-screening counts from the ingested 2026 snapshot, not the paper's 1,090 total / 293 residential numbers.",
+    "The fire-site-centred school count is 45; the station-centred check_agent truth is 53. Both are recorded so the difference is explicit.",
+    "The wind value is near-calm (0.389 m/s from 207 degrees/SW), consistent with the Tolo basin narrative rather than a strong ventilation case."
+  ]
+}

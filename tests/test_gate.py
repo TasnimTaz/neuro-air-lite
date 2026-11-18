@@ -139,4 +139,4 @@ def test_invalid_theta_is_rejected(monkeypatch):
 
 def test_default_scope_is_the_documented_size():
     assert 15 <= len(SCOPE) <= 20
-    assert DEFAULT_THETA == pytest.approx(0.50)
+    assert DEFAULT_THETA == pytest.approx(0.54)

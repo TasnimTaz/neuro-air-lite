@@ -1,0 +1,117 @@
+{
+  "model": "nomic-embed-text",
+  "query_prefix": "search_query: ",
+  "doc_prefix": "search_document: ",
+  "seed": 0,
+  "theta": 0.54,
+  "train_accuracy": 0.8286,
+  "heldout_accuracy": 0.7429,
+  "train_counts": {
+    "tp": 20,
+    "tn": 9,
+    "fp": 6,
+    "fn": 0
+  },
+  "heldout_counts": {
+    "tp": 20,
+    "tn": 6,
+    "fp": 9,
+    "fn": 0
+  },
+  "train_leaks": [
+    {
+      "id": "out-17",
+      "group": "out_of_scope",
+      "query": "What is the best phone plan in Hong Kong?",
+      "score": 0.62866
+    },
+    {
+      "id": "out-15",
+      "group": "out_of_scope",
+      "query": "What is the air quality in Beijing right now?",
+      "score": 0.712158
+    },
+    {
+      "id": "out-16",
+      "group": "out_of_scope",
+      "query": "Calculate the integral of x squared.",
+      "score": 0.636809
+    },
+    {
+      "id": "out-18",
+      "group": "out_of_scope",
+      "query": "Tell me a joke about traffic.",
+      "score": 0.598708
+    },
+    {
+      "id": "out-21",
+      "group": "out_of_scope",
+      "query": "Write a cover letter for a data science job.",
+      "score": 0.604943
+    },
+    {
+      "id": "out-20",
+      "group": "out_of_scope",
+      "query": "What is the population of New York?",
+      "score": 0.546358
+    }
+  ],
+  "heldout_leaks": [
+    {
+      "id": "out-13",
+      "group": "out_of_scope",
+      "query": "Book a hotel in Hong Kong for Friday.",
+      "score": 0.67979
+    },
+    {
+      "id": "out-05",
+      "group": "out_of_scope",
+      "query": "Explain how to cook pasta.",
+      "score": 0.543232
+    },
+    {
+      "id": "out-04",
+      "group": "out_of_scope",
+      "query": "What will PM2.5 be tomorrow in Hong Kong?",
+      "score": 0.756679
+    },
+    {
+      "id": "out-10",
+      "group": "out_of_scope",
+      "query": "Translate this sentence into Spanish.",
+      "score": 0.553195
+    },
+    {
+      "id": "out-23",
+      "group": "out_of_scope",
+      "query": "Summarise the plot of Hamlet.",
+      "score": 0.654496
+    },
+    {
+      "id": "out-06",
+      "group": "out_of_scope",
+      "query": "What is the weather forecast for Tokyo next week?",
+      "score": 0.601918
+    },
+    {
+      "id": "out-26",
+      "group": "out_of_scope",
+      "query": "Recommend a good restaurant in London.",
+      "score": 0.610518
+    },
+    {
+      "id": "out-25",
+      "group": "out_of_scope",
+      "query": "What is the score of the basketball game?",
+      "score": 0.541745
+    },
+    {
+      "id": "out-29",
+      "group": "out_of_scope",
+      "query": "Explain the history of the Roman Empire.",
+      "score": 0.60757
+    }
+  ],
+  "train_n": 35,
+  "heldout_n": 35
+}

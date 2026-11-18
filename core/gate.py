@@ -28,8 +28,9 @@ from typing import Sequence
 from core.embeddings import Embedder, cosine, embed_documents, embed_query
 
 MAX_QUERY_CHARS = 2000
-# Provisional pre-calibration value. Replace from the held-out calibration.
-DEFAULT_THETA = 0.50
+# Calibrated on the held-out gate set: theta=0.54, held-out accuracy 0.743.
+# The calibration report is docs/gate_calibration.json.
+DEFAULT_THETA = 0.54
 
 # One short sentence per capability of the six populated tables. This list is
 # data for the gate, not prompt text: it is not injected into the agent prompt

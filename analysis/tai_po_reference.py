@@ -24,8 +24,10 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import statistics
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Mapping
 
 from sqlalchemy import text
@@ -44,6 +46,19 @@ PRE_START = "2025-11-23 14:00"
 PRE_END = "2025-11-26 15:00"
 POST_START = "2025-11-26 15:00"
 POST_END = "2025-11-27 15:00"
+
+# Expert reanalysis in the paper (main text and Supplementary Note 3):
+# * matched-hour baseline: same clock hour over the 14 preceding days
+#   (12-25 November 2025);
+# * network contrast: event evening 18:00-23:00 on 26 November, differenced
+#   against the same clock-hours over those 14 days;
+# * station-specific excess: the nearest station's rise minus the mean rise of
+#   the other 17 stations.
+BASELINE_START = "2025-11-12 00:00"
+BASELINE_END = "2025-11-26 00:00"
+EVENT_EVENING_START = "2025-11-26 18:00"
+EVENT_EVENING_END = "2025-11-27 00:00"
+EVENT_EVENING_HOURS = (18, 19, 20, 21, 22, 23)
 
 # Current Hong Kong AQO (effective 2025-04-11) and WHO 2021 values. Only values
 # used by the reference output are repeated here; the KB remains the source for
@@ -222,6 +237,54 @@ SPECS: tuple[Spec, ...] = (
         "osm_feature / 2026 snapshot",
         "The ingest AOI radius; proximity screening only.",
     ),
+    # Expert-reanalysis values from the paper's Tai Po section and Supplementary
+    # Note 3. These are not system-output sanity values; they are the paper's
+    # own matched-hour and network-contrast checks.
+    Spec(
+        "matched_hour_z",
+        "Tai Po NO2 at 20:00 vs its 14-day matched-hour baseline (z)",
+        1.9,
+        0.05,
+        "z",
+        "paper main text / Supplementary Note 3",
+        "Sample standard deviation (ddof=1), same 20:00 hour on 12-25 Nov 2025.",
+    ),
+    Spec(
+        "matched_hour_max_prev_14d",
+        "Maximum Tai Po NO2 at 20:00 over the preceding 14 days",
+        125.5,
+        0.05,
+        "ug/m3",
+        "paper main text / Supplementary Note 3",
+        "A non-fire evening reached this value; the fire-evening peak was 123.2.",
+    ),
+    Spec(
+        "network_mean_rise",
+        "Territory-wide NO2 rise over the event evening, other 17 stations",
+        19.6,
+        0.05,
+        "ug/m3",
+        "paper main text / Supplementary Note 3",
+        "Event evening 18:00-23:00 minus the same clock-hours on 12-25 Nov.",
+    ),
+    Spec(
+        "nearest_station_rise_vs_network",
+        "Tai Po PM2.5 rise above the other-17-station mean rise",
+        7.4,
+        0.05,
+        "ug/m3",
+        "paper main text / Supplementary Note 3",
+        "Paper reports the nearest station as first of 18 for PM2.5 elevation.",
+    ),
+    Spec(
+        "pm25_rank_of_nearest",
+        "Tai Po PM2.5 evening-elevation rank among the 18 stations",
+        1,
+        0,
+        "rank",
+        "paper main text / Supplementary Note 3",
+        "Rank 1 of 18; larger rises rank first.",
+    ),
 )
 
 EXPECTED = {spec.key: spec.expected for spec in SPECS}
@@ -259,6 +322,59 @@ METRICS_SQL = text(
     WHERE s.station_code = :station_code
       AND datetime >= :pre_start
       AND datetime < :post_end
+    """
+)
+
+MATCHED_HOUR_SQL = text(
+    """
+    SELECT a.datetime, a.no2
+    FROM hourly_station_air_quality a
+    JOIN air_quality_station s ON s.id = a.station_id
+    WHERE s.station_code = :station_code
+      AND a.datetime >= CAST(:baseline_start AS timestamp)
+      AND a.datetime < CAST(:baseline_end AS timestamp)
+      AND extract(hour from a.datetime) = :matched_hour
+      AND a.no2 IS NOT NULL
+    ORDER BY a.datetime
+    """
+)
+
+EVENING_NETWORK_SQL = text(
+    """
+    WITH event AS (
+      SELECT
+        s.station_code,
+        avg(a.no2) AS no2_event,
+        avg(a.pm2_5) AS pm25_event,
+        avg(a.pm10) AS pm10_event
+      FROM hourly_station_air_quality a
+      JOIN air_quality_station s ON s.id = a.station_id
+      WHERE a.datetime >= CAST(:event_start AS timestamp)
+        AND a.datetime < CAST(:event_end AS timestamp)
+      GROUP BY s.station_code
+    ), baseline AS (
+      SELECT
+        s.station_code,
+        avg(a.no2) AS no2_base,
+        avg(a.pm2_5) AS pm25_base,
+        avg(a.pm10) AS pm10_base
+      FROM hourly_station_air_quality a
+      JOIN air_quality_station s ON s.id = a.station_id
+      WHERE a.datetime >= CAST(:baseline_start AS timestamp)
+        AND a.datetime < CAST(:baseline_end AS timestamp)
+        AND extract(hour from a.datetime) BETWEEN 18 AND 23
+      GROUP BY s.station_code
+    )
+    SELECT
+      e.station_code,
+      e.no2_event, b.no2_base, e.no2_event - b.no2_base AS no2_rise,
+      e.pm25_event, b.pm25_base, e.pm25_event - b.pm25_base AS pm25_rise,
+      e.pm10_event, b.pm10_base, e.pm10_event - b.pm10_base AS pm10_rise
+    FROM event e
+    JOIN baseline b ON b.station_code = e.station_code
+    WHERE e.no2_event IS NOT NULL
+      AND b.no2_base IS NOT NULL
+    ORDER BY e.station_code
     """
 )
 
@@ -354,6 +470,8 @@ BUILDINGS_SQL = text(
 
 SQL_STATEMENTS = (
     METRICS_SQL,
+    MATCHED_HOUR_SQL,
+    EVENING_NETWORK_SQL,
     WIND_SQL,
     STATION_SQL,
     SENSITIVE_COUNTS_SQL,
@@ -410,6 +528,171 @@ def evaluate_reference(observed: Mapping[str, Any]) -> list[Check]:
     return checks
 
 
+def _mean(values: list[float]) -> float | None:
+    return statistics.fmean(values) if values else None
+
+
+def _build_anomaly_assessment(
+    observed: Mapping[str, Any],
+    matched_hour_rows: list[Mapping[str, Any]],
+    network_rows: list[Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Apply the paper's fixed matched-hour and evening network definitions.
+
+    The rule below is deliberately simple and explicit; it is not an LLM
+    judgement. It encodes what the paper's reanalysis says a single-source
+    plume would need to show. The values are reported even when the rule is
+    indeterminate, so the reader can inspect the evidence.
+    """
+    matched_values = [
+        float(row["no2"]) for row in matched_hour_rows if row.get("no2") is not None
+    ]
+    matched_mean = _mean(matched_values)
+    matched_sd = (
+        statistics.stdev(matched_values) if len(matched_values) > 1 else None
+    )
+    matched_max = max(matched_values) if matched_values else None
+    no2_peak = observed.get("no2_at_2000")
+    z = None
+    if (
+        no2_peak is not None
+        and matched_mean is not None
+        and matched_sd not in (None, 0)
+    ):
+        z = (float(no2_peak) - matched_mean) / matched_sd
+
+    tai_po = next(
+        (row for row in network_rows if row["station_code"] == STATION_CODE),
+        None,
+    )
+    others = [
+        row for row in network_rows if row["station_code"] != STATION_CODE
+    ]
+    other_no2_rises = [
+        float(row["no2_rise"]) for row in others if row.get("no2_rise") is not None
+    ]
+    other_pm25_rises = [
+        float(row["pm25_rise"]) for row in others if row.get("pm25_rise") is not None
+    ]
+    network_no2_rise = _mean(other_no2_rises)
+    network_pm25_rise = _mean(other_pm25_rises)
+    tai_no2_rise = (
+        float(tai_po["no2_rise"])
+        if tai_po is not None and tai_po.get("no2_rise") is not None
+        else None
+    )
+    tai_pm25_rise = (
+        float(tai_po["pm25_rise"])
+        if tai_po is not None and tai_po.get("pm25_rise") is not None
+        else None
+    )
+    pm25_rise_values = [
+        float(row["pm25_rise"])
+        for row in network_rows
+        if row.get("pm25_rise") is not None
+    ]
+    pm25_rank = None
+    if tai_pm25_rise is not None and pm25_rise_values:
+        pm25_rank = 1 + sum(value > tai_pm25_rise for value in pm25_rise_values)
+    pm25_excess = (
+        tai_pm25_rise - network_pm25_rise
+        if tai_pm25_rise is not None and network_pm25_rise is not None
+        else None
+    )
+
+    no2_pre_mean = observed.get("no2_pre_mean")
+    no2_post_peak = observed.get("no2_post_peak")
+    raw_ratio = (
+        float(no2_post_peak) / float(no2_pre_mean)
+        if no2_post_peak is not None and no2_pre_mean not in (None, 0)
+        else None
+    )
+    pm25_pre_mean = observed.get("pm25_pre_mean")
+    pm25_post_peak = observed.get("pm25_post_peak")
+    pm25_raw_ratio = (
+        float(pm25_post_peak) / float(pm25_pre_mean)
+        if pm25_post_peak is not None and pm25_pre_mean not in (None, 0)
+        else None
+    )
+
+    # Fixed, pre-declared decision rule. A single-source plume needs an unusual
+    # nearest-station excursion, a new matched-hour maximum, a modest network
+    # rise, and a local PM2.5 excess. If the matched-hour evidence instead shows
+    # an ordinary high value and the network rises with it, the evidence points
+    # away from a single-source plume.
+    if (
+        z is None
+        or matched_max is None
+        or no2_peak is None
+        or network_no2_rise is None
+        or pm25_excess is None
+    ):
+        supports_local_plume = "indeterminate"
+    elif (
+        z >= 2.0
+        and float(no2_peak) > matched_max
+        and network_no2_rise < 5.0
+        and pm25_excess >= 5.0
+    ):
+        supports_local_plume = "true"
+    elif (
+        (z < 2.0 or float(no2_peak) <= matched_max)
+        and network_no2_rise >= 10.0
+    ):
+        supports_local_plume = "false"
+    else:
+        supports_local_plume = "indeterminate"
+
+    rule = (
+        "false when (matched_hour_z < 2.0 or event NO2 peak <= the preceding "
+        "14-day matched-hour maximum) and the other-17-station mean NO2 rise "
+        "is >= 10 ug/m3; true only when z >= 2.0, the event peak exceeds the "
+        "preceding maximum, the network mean rise is < 5 ug/m3, and the nearest-"
+        "station PM2.5 excess is >= 5 ug/m3; otherwise indeterminate"
+    )
+
+    return {
+        "raw_ratio": raw_ratio,
+        "raw_ratio_pollutant": "NO2",
+        "raw_ratio_by_pollutant": {
+            "NO2": raw_ratio,
+            "PM2.5": pm25_raw_ratio,
+        },
+        "matched_hour_z": z,
+        "matched_hour_mean": matched_mean,
+        "matched_hour_sd": matched_sd,
+        "matched_hour_n": len(matched_values),
+        "matched_hour_max_prev_14d": matched_max,
+        "network_mean_rise": network_no2_rise,
+        "network_mean_rise_pollutant": "NO2",
+        "network_mean_rise_other_17": network_no2_rise,
+        "network_mean_rise_all_18": _mean(
+            [
+                float(row["no2_rise"])
+                for row in network_rows
+                if row.get("no2_rise") is not None
+            ]
+        ),
+        "nearest_station_no2_rise": tai_no2_rise,
+        "nearest_station_pm25_rise": tai_pm25_rise,
+        "network_pm25_mean_rise_other_17": network_pm25_rise,
+        "nearest_station_rise_vs_network": pm25_excess,
+        "nearest_station_rise_vs_network_pollutant": "PM2.5",
+        "pm25_rank_of_nearest": pm25_rank,
+        "pm25_station_count": len(pm25_rise_values),
+        "event_evening": [EVENT_EVENING_START, EVENT_EVENING_END],
+        "baseline_window": ["2025-11-12", "2025-11-25"],
+        "supports_local_plume": supports_local_plume,
+        "rule": rule,
+        "caveat": (
+            "The peak-to-mean ratio is a screening signal, not causal "
+            "attribution. The matched-hour z-score, the territory-wide network "
+            "contrast and the near-calm wind do not support a single-source "
+            "plume."
+        ),
+    }
+
+
 def compute_reference(engine: Engine) -> dict[str, Any]:
     """Run the fixed read-only queries and return a JSON-serialisable report."""
     params = {
@@ -419,6 +702,11 @@ def compute_reference(engine: Engine) -> dict[str, Any]:
         "pre_end": PRE_END,
         "post_start": POST_START,
         "post_end": POST_END,
+        "baseline_start": BASELINE_START,
+        "baseline_end": BASELINE_END,
+        "event_start": EVENT_EVENING_START,
+        "event_end": EVENT_EVENING_END,
+        "matched_hour": 20,
         "lat": FIRE_SITE_LAT,
         "lon": FIRE_SITE_LON,
     }
@@ -430,6 +718,12 @@ def compute_reference(engine: Engine) -> dict[str, Any]:
         metrics = dict(
             conn.execute(METRICS_SQL, params).mappings().one()
         )
+        matched_hour_rows = [
+            dict(row) for row in conn.execute(MATCHED_HOUR_SQL, params).mappings()
+        ]
+        network_rows = [
+            dict(row) for row in conn.execute(EVENING_NETWORK_SQL, params).mappings()
+        ]
         wind = conn.execute(WIND_SQL, params).mappings().one_or_none() or {}
         station = conn.execute(STATION_SQL, params).mappings().one()
 
@@ -507,6 +801,23 @@ def compute_reference(engine: Engine) -> dict[str, Any]:
         ),
     }
 
+    anomaly_assessment = _build_anomaly_assessment(
+        observed, matched_hour_rows, network_rows
+    )
+    observed.update(
+        {
+            "matched_hour_z": anomaly_assessment["matched_hour_z"],
+            "matched_hour_max_prev_14d": anomaly_assessment[
+                "matched_hour_max_prev_14d"
+            ],
+            "network_mean_rise": anomaly_assessment["network_mean_rise"],
+            "nearest_station_rise_vs_network": anomaly_assessment[
+                "nearest_station_rise_vs_network"
+            ],
+            "pm25_rank_of_nearest": anomaly_assessment["pm25_rank_of_nearest"],
+        }
+    )
+
     checks = evaluate_reference(observed)
     ok = all(check.ok for check in checks)
     nearest_clean = [
@@ -548,10 +859,20 @@ def compute_reference(engine: Engine) -> dict[str, Any]:
         },
         "observed": observed,
         "expected": EXPECTED,
+        "anomaly_assessment": anomaly_assessment,
         "checks": [asdict(check) for check in checks],
         "nearest_sensitive": nearest_clean,
         "notes": [
             "Read-only database reference; no LLM and no database writes.",
+            "The peak-to-mean ratio is a screening signal, not causal attribution. "
+            "The matched-hour z-score, the territory-wide network contrast and the "
+            "near-calm wind do not support a single-source plume.",
+            "Matched-hour baseline: Tai Po NO2 at 20:00 on 2025-11-26 against the "
+            "same clock hour on the 14 preceding days (2025-11-12 to 2025-11-25), "
+            "using the sample standard deviation (ddof=1).",
+            "Network contrast: each station's mean over the event evening "
+            "(2025-11-26 18:00-23:00) minus its mean over the same clock-hours on "
+            "the 14 preceding days; the network mean uses the other 17 stations.",
             "OSM building counts are proximity-screening counts from the ingested "
             "2026 snapshot, not the paper's 1,090 total / 293 residential numbers.",
             "The fire-site-centred school count is 45; the station-centred "
@@ -569,6 +890,12 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="emit one-line JSON instead of pretty JSON",
     )
+    parser.add_argument(
+        "--out",
+        type=Path,
+        default=None,
+        help="optional path to write the JSON report (for docs/tai_po_reference.json)",
+    )
     args = parser.parse_args(argv)
 
     load_agent_env(override=True, scrub=True)
@@ -578,14 +905,16 @@ def main(argv: list[str] | None = None) -> int:
     finally:
         engine.dispose()
 
-    print(
-        json.dumps(
-            report,
-            ensure_ascii=False,
-            indent=None if args.compact else 2,
-            default=str,
-        )
+    rendered = json.dumps(
+        report,
+        ensure_ascii=False,
+        indent=None if args.compact else 2,
+        default=str,
     )
+    if args.out is not None:
+        args.out.parent.mkdir(parents=True, exist_ok=True)
+        args.out.write_text(rendered + "\n", encoding="utf-8")
+    print(rendered)
     return 0 if report["ok"] else 1
 
 

@@ -789,6 +789,80 @@ ambiguity. All 20 failed case-runs are classified in
 involve weather pairing, 16/20 hit the stall guard, and 8 ended in the stop
 sentinel.
 
+#### Matched non-hold-out verifier-mode comparison
+
+The `flag` and `none` runs were deliberately limited to the 14 non-hold-out
+tasks (42 case-runs). They must be compared with the **same 14-task single
+subset**, not with the 60-case single total. The correct matched comparison is:
+
+| Matched 14 non-hold-out tasks | Case-runs | Rate |
+| --- | ---: | ---: |
+| Single v3 (filtered to the 14 tasks) | **34/42** | **81.0%** |
+| Multi v3 + verifier `flag` | **12/42** | **28.6%** |
+
+The old pairing of `45/60 (75.0%)` single with `12/42 (28.6%)` flag mixes a
+60-case denominator with a 42-case denominator and is not a valid comparison.
+The matched task-level test is single 10 wins, flag 0 wins and 4 ties (exact
+McNemar `p=0.0020`). The flag audit is `0 wrong->right | 0 right->wrong | 12
+right->right | 30 wrong->wrong`: the verifier changed 30 answers but the flag
+mode restores the synthesis answer, so the final score stays at the
+pre-verifier 12/42.
+
+`none` is **abandoned/incomplete**, not a result. The artifact
+`runs/multi/day5b_v3_verifier_none_nonholdout_3x/` contains 21 case files and no
+`run.json`; it has no aggregate score and must not be reported as one. Without
+verifier authority the multi worker pipeline scores **12/42 (28.6%)**, so the
+verifier is the main solver in the multi arm. The verifier's authority, not the
+worker handoff, is what moves the score.
+
+Reproduce the matched comparison without editing frozen eval code:
+
+```powershell
+uv run python scripts/filter_run_artifact.py `
+  --input runs/baseline/day5b_v3_budget20_3x --non-holdout `
+  --out runs/single_verified/inputs/single_v3_nonholdout_3x
+uv run python evals/compare_arms.py `
+  --single runs/single_verified/inputs/single_v3_nonholdout_3x `
+  --multi runs/multi/day5b_v3_verifier_flag_nonholdout_3x `
+  --out runs/multi/day5b_v3_verifier_flag_nonholdout_3x/compare_vs_single_matched.json
+```
+
+#### Optional-preferred single + verifier control
+
+`scripts/run_single_verified.py` is a non-frozen control arm: the v3 single
+solver gets 14 steps, then the unchanged multi verifier role and prompt get 6
+reserved steps (`verify_reserve=6`), for the same 20-step total. It runs the 14
+non-hold-out tasks three times with the same frozen scorer and the same
+`compare_arms.py`. It does **not** replace the official single or multi arms and
+does not change the scorer.
+
+| Matched 14 non-hold-out tasks | Case-runs | Rate |
+| --- | ---: | ---: |
+| Single v3 (filtered) | 34/42 | 81.0% |
+| **Single + verifier (14 + 6)** | **35/42** | **83.3%** |
+| Multi v3 + verifier `overwrite` | 32/42 | 76.2% |
+| Multi v3 + verifier `flag` | 12/42 | 28.6% |
+
+The three single-verified repeats were 11/14, 12/14 and 12/14 (range
+78.6%-85.7%). The verifier audit was **36/42 pre -> 35/42 final**, with
+`0 wrong->right | 1 right->wrong | 35 right->right | 6 wrong->wrong` and 6
+changed answers. The verifier therefore did not create the one-run gain over
+single; it slightly harmed the solver's pre-verify result.
+
+Against single, single-verified wins 1 task, loses 0 and ties 13 (exact McNemar
+`p=1.0000`; paired bootstrap `+0.024`, 95% CI `[0.000, +0.071]`). It costs
+2.66x tokens, 3.35x seconds and 2.50x calls per case. Against multi-overwrite,
+single-verified is 35/42 versus 32/42; multi-overwrite wins 1 task, loses 4 and
+ties 9 (exact McNemar `p=0.3750`; bootstrap `-0.071`, 95% CI
+`[-0.167, +0.024]`); the multi-overwrite arm costs 2.04x its tokens, 2.13x its
+seconds and 2.44x its calls. The single-versus-multi-overwrite comparison is
+34/42 versus 32/42; multi-overwrite wins 2 tasks, loses 4 and ties 8
+(`p=0.6875`). These differences are not statistically distinguishable at this
+sample size. The comparison artifacts are
+`runs/single_verified/inputs/compare_single_vs_flag_matched.json`,
+`compare_single_vs_sv.json` and `compare_sv_vs_multi_overwrite.json`
+(gitignored).
+
 #### Day 5 preliminary 1-repeat (historical)
 
 The earlier usable 1-repeat multi run used the same frozen prompt and finished at
@@ -859,7 +933,7 @@ core/gate.py                cosine relevance gate over 18 capability sentences
 domains/hk/kb.py            Markdown chunking, kb_search(), build_runtime_with_kb()
 evals/gate_set.json         30 in-scope, 30 out-of-scope, 10 vague in-scope
 evals/premise_traps.json    10 premise traps with expected behaviour
-scripts/calibrate_gate.py   live held-out threshold calibration (not run yet)
+scripts/calibrate_gate.py   live held-out threshold calibration (theta=0.54)
 scripts/check_premise_traps.py  validator and live single-agent trap runner
 ```
 
@@ -881,21 +955,23 @@ of the prefix and of the cache key. Calibration and runtime both call the same
 `embed_query` / `embed_documents` methods; set either variable to an empty
 quoted string for a symmetric embedding model.
 
-Install the model only after the background evaluation runs finish:
+The model was installed after the single-verified run finished, so the live
+chat evaluation was not competing with an embedding load:
 
 ```powershell
 ollama pull nomic-embed-text
 ```
 
-Pulling or loading the embedding model now could evict the chat model from
-memory and change the running evaluation's latency.
+`ollama list` reports `nomic-embed-text:latest` at 274 MB. Calibration and the
+other live checks were run serially because they share the same Ollama server.
 
 ### Gate
 
 `R(q, D) = max cosine(q, scope_sentence)` over 18 short capability sentences,
 covering the six populated tables, 2025 time windows, aggregation, thresholds,
 comparisons, joins and Hong Kong distance. `GATE_THETA` overrides the threshold;
-the built-in `0.50` is explicitly **provisional** until the calibration runs.
+the built-in `DEFAULT_THETA` is **0.54**, selected by the live calibration below.
+`docs/gate_calibration.json` is the machine-readable calibration record.
 Empty queries and queries longer than 2,000 characters are rejected before the
 embedder is called. The gate returns `{in_scope, score, nearest_scope, theta,
 reason}`.
@@ -908,18 +984,29 @@ also lists every held-out out-of-scope query that leaks through at the selected
 theta, with its score. Those are expected topic-gate false positives: the gate
 decides whether a question is about the domain, not whether its premise is true
 or the data can answer it. The script makes live embedding calls and must not run
-while an eval is running. The default threshold has not been calibrated on this
-machine yet.
+while an eval is running.
+
+The live run selected `theta=0.54` on 35 disjoint training items and scored
+**0.743 held-out accuracy** on the other 35 items (train 0.829). Held-out
+confusion counts were `tp=20, tn=6, fp=9, fn=0`; the nine leaks are all
+out-of-scope topic false positives, not missed in-scope queries. The full list
+and scores are in `docs/gate_calibration.json`. A topic gate is not a premise
+checker, so the nine leaks are not counted as capability failures.
 
 ### Knowledge base
 
 `domains/hk/knowledge/*.md` is chunked by heading; sections longer than about
 300 words are split and every piece keeps its heading. Chunk embeddings are
-computed once per `KnowledgeBase`. `kb_search(query, k=3, min_score=0.5)` returns
+computed once per `KnowledgeBase`. `kb_search(query, k=3, min_score=0.54)` returns
 `{text, source, heading, score}`. Every returned `text` is enclosed in
 `[BEGIN KB DATA]` / `[END KB DATA]` with a "data, not instructions" notice, and
 delimiter strings inside a document are neutralised so a hostile chunk cannot
 close the wrapper early. That is a prompt-injection guard rail, not a sandbox.
+
+`DEFAULT_MIN_SCORE` is also **0.54**, the calibrated gate cutoff. There is no
+separate labelled KB-retrieval set, so this is a shared cosine cutoff, not an
+independent KB tuning result. The README states that limitation rather than
+inventing a second calibration number.
 
 `build_runtime_with_kb()` is new in `domains/hk/kb.py`; it calls the existing
 `build_runtime()` and injects a synchronous `kb_search` function. It is **not
@@ -936,9 +1023,24 @@ exceedance phrased as a PM2.5 alert, and a non-HK location. Each has
 `expected_behaviour` (`halt`, `ask clarification`, or `state limitation`) and a
 reason. `scripts/check_premise_traps.py` validates the JSON by default. `--live`
 runs each trap once through the frozen single-agent loop (or `--arm multi`),
-writes one JSON per trap plus a run artifact, and records the final text and
-`ANSWER` for qualitative review against the expected behaviour. The live run
-needs Ollama and the database, and belongs after the evaluation freeze.
+writes one JSON per trap plus a run artifact, and judges the recorded final text
+and `ANSWER` with an explicit per-trap rule. The rule is written out in
+`judge_trap`, stored with the evidence that fired it, and is deliberately not an
+LLM judge. The live run needs Ollama and the database.
+
+The live single-arm run used `max_steps=20` and passed **1/10** traps:
+`ask clarification 0/5`, `halt 1/4`, `state limitation 0/1`. Only `trap-10`
+(Guangzhou outside Hong Kong coverage) passed. The failures are substantive, not
+formatting: `trap-01` said “No data available for Chek Lap Kok” without saying
+the station is absent from the inventory; `trap-02` answered `0` for a 2026
+future date; `trap-03` said the schema has no ozone-emissions table instead of
+correcting the secondary-pollutant premise; `trap-04` did not ask for a station
+or time; `trap-05` invented a time period and answered `63.08`; `trap-06` did not
+identify the missing CO unit; `trap-07` did not mention 2019; `trap-08` claimed
+the 2025-11-26 fire was outside the 2025 data range; and `trap-09` did not
+distinguish PM10 from PM2.5. The raw text and rule evidence are in
+`runs/premise_traps/day6_live/run.json`. This is a diagnostic, not a numeric
+benchmark result.
 
 ### Day 6 tests and limits
 
@@ -1039,9 +1141,50 @@ call Ollama or Postgres:
 uv run pytest -q tests/test_api.py
 ```
 
-The live browser demo is deliberately **not run yet**: the background verifier
-mode evaluation is still using the local Ollama model, and live queries would
-distort its latency measurements.
+`scripts/run_demo.py` is the live transcript runner for the same API. It reads
+the five prompts in `scripts/demo_queries.md`, sends the first four to the
+single arm and the Tai Po case study to the multi arm, and saves the raw SSE
+bytes, parsed events, final payload, chart configs, verifier status and errors
+under `runs/demo/` (gitignored). The browser UI consumes the same stream.
+
+The live browser/API demo was run on 2026-11-18 against
+`http://127.0.0.1:8000` with `scripts/run_demo.py`. Health before and after was
+`status: ok`, `degraded: false`, `busy: false`. All five requests returned HTTP
+200; the index page was 200 (14,911 bytes) and contained the AI notice. The
+first four single-arm prompts returned event order
+`start -> code -> output -> final -> done` with `verifier_status: not_run`.
+Their answers were 20.0 m, 18.25 ug/m3 with one `Daily Mean` line chart (30 x
+values, one line series, y-axis `PM2.5 (ug/m3)`), 13 hours, and 53 institutions.
+No SSE `error` event occurred.
+
+The fifth prompt, the Tai Po fire case study on the multi arm, exposed a real
+failure. Event order was `start -> plan -> six worker_start cycles with seven
+code/output pairs -> agent_final -> final -> done`. The data-acquisition worker
+joined `hourly_station_air_quality` to `hourly_station_weather` on `station_id` and got
+0 rows, even though the schema prompt already says to join through
+`weather_station.station_code = 'wx_' || air_quality_station.station_code` and
+never to use the air-quality `station_id` as a weather `station_id`
+(`domains/hk/schema_prompt.py:150-157`). Later workers used wrong dates and
+called the forbidden `exit()`. The final payload had `answer: null`,
+`charts: []`, `ok: true`, `verifier_status: "confirmed"` and
+`verifier_changed_answer: false`; its final text was `The question cannot be
+answered from the data because there is no data available for the specified
+station and date range.` It used 15 calls and 66,197 tokens. The verifier
+banner was `confirmed` and its audit text was `The task cannot be completed due
+to the security restrictions preventing the use of the exit() function. Please
+provide an alternative approach to handle the situation where no matching air
+quality station is found.` It therefore confirmed a wrong no-data
+answer, and no SSE `error` event was emitted. The correct code-prefix join
+returns 24 rows for Tai Po on 2025-11-26; the 20:00 row is PM2.5 35.7, NO2
+123.2, AQHI 5, wind 0.389 m/s from 206.6 deg (SW).
+
+This is the paired-weather join failure, not evidence that the data is absent.
+Do not edit the evaluated prompt now. The recommended Day 9/10 fix is a
+read-only DB view (for example `station_hourly_joined`) that exposes the tested
+code-prefix mapping and the `station_id`/`datetime` join, plus a regression
+test. If the prompt is revised instead, a v4 must restate the join rule and show
+the working example. The transcripts are in
+`runs/demo/day8_live/manifest.json` and `runs/demo/day8_live.log` (gitignored).
 
 ## Day 8: deterministic Tai Po reference and daemon
 
@@ -1054,6 +1197,17 @@ the observed values with the sanity values used by `scripts/check_data.py`:
 uv run python -m analysis.tai_po_reference --compact
 ```
 
+The paper-target checks are printed as paper / ours / delta, without tuning the
+fixed queries:
+
+| Paper target | Paper | Ours | Delta |
+| --- | ---: | ---: | ---: |
+| Matched-hour NO2 z-score | ~1.9 | 1.910571 | +0.010571 |
+| Preceding-fortnight matched-hour maximum | 125.5 ug/m3 | 125.5 ug/m3 | 0 |
+| Territory-wide NO2 mean rise, other 17 | ~+19.6 ug/m3 | 19.564119 ug/m3 | -0.035881 |
+| Tai Po PM2.5 excess over the other-17 mean | ~+7.4 ug/m3 | 7.401836 ug/m3 | +0.001836 |
+| Tai Po PM2.5 evening-elevation rank | 1st of 18 | 1 of 18 | 0 |
+
 The snapshot includes:
 
 | Reference check | Observed |
@@ -1064,6 +1218,11 @@ The snapshot includes:
 | PM2.5 pre-fire mean | 26.675 ug/m3 |
 | NO2 24 h post-fire peak | 123.2 ug/m3 |
 | NO2 pre-fire mean | 48.903 ug/m3 |
+| Matched-hour z (NO2, 20:00 vs 12-25 Nov) | 1.911 (paper ~1.9) |
+| Preceding-fortnight matched-hour maximum | 125.5 ug/m3 (paper 125.5) |
+| Territory-wide NO2 mean rise, other 17 stations | 19.564 ug/m3 (paper ~+19.6) |
+| Tai Po PM2.5 excess over the other-17 mean | 7.402 ug/m3 (paper ~+7.4) |
+| Tai Po PM2.5 evening-elevation rank | 1 of 18 (paper 1st) |
 | Wind at 2025-11-26 20:00 | 0.389 m/s from 207 deg (SW) |
 | Educational sensitive areas, 1.5 km from fire site | 45 |
 | Educational sensitive areas, 1.5 km from Tai Po station | 53 |
@@ -1078,17 +1237,94 @@ The 54.6 ug/m3 value is an hourly peak inside the 24 h window, so comparing it
 with the 24 h AQO (37.5 ug/m3) or WHO guideline (15 ug/m3) is a screening
 comparison, not a legal compliance determination.
 
-`analysis/daemon.py` is a foreground drift monitor. It creates and disposes a
-read-only engine per check, reports a database error as `degraded` without
-crashing, and prints one JSON object per line:
+**Caveat.** The peak-to-mean ratio is a screening signal, not causal
+attribution. The matched-hour z-score, the territory-wide network contrast and
+the near-calm wind do not support a single-source plume. The reference's
+`anomaly_assessment` therefore reports `raw_ratio`, `matched_hour_z`,
+`matched_hour_max_prev_14d`, `network_mean_rise`,
+`nearest_station_rise_vs_network`, `pm25_rank_of_nearest` and
+`supports_local_plume: "false"` with the fixed rule printed in the JSON; it is a
+rule-based assessment, not an LLM judgement. The paper's exact definitions are used: the matched-hour baseline is
+20:00 on 26 November against 20:00 on 12-25 November (sample standard deviation,
+`n=14`); the network contrast is the event evening 18:00-23:00 against the same
+clock-hours on those 14 days; and the nearest-station excess is Tai Po's PM2.5
+rise minus the mean rise of the other 17 stations.
+
+`docs/tai_po_reference.json` is the committed snapshot produced by
+`--out docs/tai_po_reference.json`. It has 21 checks, including the five paper
+reanalysis values above. The full live run is read-only and uses no model.
+
+`analysis/daemon.py` keeps the foreground drift monitor and adds the paper's
+AQHI alert path. It creates and disposes a read-only engine per check, reports a
+database error as `degraded` without crashing, and prints one JSON object per
+line:
 
 ```powershell
 uv run python -m analysis.daemon --once
 uv run python -m analysis.daemon --interval 300
+uv run python -m analysis.daemon --alerts --once
+$env:REPLAY_NOW = '2025-11-26 15:30'
+uv run python -m analysis.daemon --alerts --once
 ```
 
-It writes no files and no database rows. It is not the Day 10 execution
-isolation boundary.
+The alert path uses `check_alerts(conn, now, threshold, cooldown)`:
+`AQHI_ALERT` defaults to `7` and is environment-configurable; the per-station
+cooldown defaults to 3600 seconds (`AQHI_ALERT_COOLDOWN_SECONDS`); the latest
+hourly AQHI at or before `now` is used; and `REPLAY_NOW` is authoritative, so a
+replay never falls back to wall-clock time. The default job text is
+`Assess the air quality situation near <station> and nearby sensitive receptors.`
+and the callback is pluggable, so the daemon can hand the query to the real
+agent later. At the requested replay `2025-11-26 15:30`, every station's latest
+hour is 15:00 with AQHI 5-6, below the threshold; the correct result is **zero
+triggers**. The DB test in `tests/test_tai_po_reference.py` also proves the path
+does trigger on synthetic rows and respects cooldown. It writes no files and no
+database rows. It is not the Day 10 execution isolation boundary.
+
+### Agent-to-reference replication
+
+`scripts/compare_agent_to_reference.py` is a separate, non-frozen replication
+check. It asks the v3 **single** arm (no workers, no verifier) for exactly eight
+fields under the exact `ANSWER` dictionary contract, three times, and compares
+each field with the deterministic reference computed from the read-only
+database. The evaluated prompt and the scorer are unchanged. The tolerances are
+0.1 for `no2_at_2000`, `pm25_post_peak`, `matched_hour_z` and
+`matched_hour_max_prev_14d`; 0.2 for `network_mean_rise` and
+`nearest_station_rise_vs_network`; exact integer equality for
+`pm25_rank_of_nearest`; and 0.01 for `wind_speed_2000`. The two requested chart
+configs are checked structurally: line chart, title containing `NO2`, 14 x
+values, one series of length 14, y-axis containing `ug/m3`; and bar chart, title
+containing `PM2.5`, 18 x values, one series of length 18, y-axis containing
+`ug/m3`. A failure is printed verbatim and stored in the run artifact. The
+single arm uses the same `_stall_guarded_llm` runtime safeguard as the
+single-verified control so repeated identical code does not consume the whole
+step budget; it adds no domain hint.
+
+The live 3-repeat run on 2026-11-18 produced **0/24 field matches**, **0/3
+`ANSWER` dicts**, **0/3 line charts** and **0/3 bar charts**; all three runs
+completed (3/3). The deterministic reference passed 21/21 checks
+(`reference_ok: true`). Every one of the eight fields was 0/3.
+
+The failures are reported verbatim:
+
+- Repeat 1: 3 steps, 405.6 s, 29,498 tokens. `last_error` was
+  `SecurityError: forbidden call: exit()`. Final text:
+  `I stopped because the identical code block was about to run again. Use the
+  values already staged, change the query, or report the limitation.`
+- Repeat 2: 2 steps, 98.7 s, 13,901 tokens. Same security error. Final text:
+  `Tai Po station not uniquely resolved.`
+- Repeat 3: 2 steps, 262.3 s, 20,162 tokens. Final text: the same stall-guard
+  message as repeat 1.
+
+The model's station query used
+`lower(replace(name_en, ' ', '')) LIKE '%taipo%'` and then called `exit()` when
+it did not get exactly one row; the runtime forbids `exit()`. The model never
+produced the `ANSWER` dict or either chart. This is a real single-arm failure on
+the multi-field contract, not a reference failure. The artifact records the
+full-prompt hash `d23ae723...`; recomputing the base-only hash with the same
+`PROMPT_TIME` gives `538596df...`, identical to the frozen v3 single baseline.
+The difference is the merged-role addendum, so the evaluated base prompt was not
+edited. The artifact is `runs/reference_compare/day8_single_3x/run.json`
+(gitignored).
 
 ## Conventions
 
@@ -1137,7 +1373,7 @@ isolation boundary.
 | 3 | LLM client, runtime, security, single agent | done |
 | 4 | schema prompt, geocoder, charts, frozen v2 baseline | done |
 | 5 | coordinator, workers, verifier | implemented; official 3-repeat 41/60 vs single 46/60 (p=0.109; 5.21x tokens) - no gain |
-| 5b | matched-budget multi audit, verifier modes, v3 prompt | v3 rerun done: 40/60 multi vs 45/60 single (p=0.289) - negative; flag 12/42 complete, none incomplete (21/42), strong API stopped because all `*_STRONG` variables are unset |
-| 6 | relevance gate, knowledge retrieval, verifier tuning | implemented offline; live calibration and prefix-aware premise traps still pending |
-| 7 | FastAPI SSE API and ECharts demo UI | implemented; 209 tests pass; timeout-poison 503 guard added; live demo deferred |
-| 8 | deterministic Tai Po reference, daemon | implemented; read-only reference and daemon drift check verified, live demo deferred |
+| 5b | matched-budget multi audit, verifier modes, v3 prompt | v3 rerun done: 40/60 multi vs 45/60 single (p=0.289) - negative; flag 12/42 complete; single-verified 35/42 vs single 34/42 (p=1.000) - not significant; none incomplete (21/42); strong API stopped because all `*_STRONG` variables are unset |
+| 6 | relevance gate, knowledge retrieval, verifier tuning | implemented; live gate calibration theta=0.54, held-out 0.743; live premise traps 1/10 (diagnostic, not a benchmark) |
+| 7 | FastAPI SSE API and ECharts demo UI | implemented; 218 tests pass; timeout-poison 503 guard added; live demo 5/5 HTTP 200: single 4/4 answered, but the multi Tai Po run joined weather on the wrong key, returned no data and the verifier confirmed that wrong answer |
+| 8 | deterministic Tai Po reference, daemon | implemented; reference 21/21 checks, paper targets reproduced, daemon replay 0 triggers; live agent-to-reference 0/24 fields, 0/3 ANSWER dicts, 0/3 charts - single arm failed, reference valid |
