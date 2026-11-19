@@ -97,14 +97,18 @@ def test_v2_does_not_leak_into_prompt(prompt_shingles: set[str], case):
     assert not (_shingles(case.truth_sql) & prompt_shingles), case.truth_sql
 
 
-def test_v3_weather_join_rule_is_present_without_truth_leak():
+def test_v4_weather_join_view_and_abort_rules_are_present_without_truth_leak():
     now = datetime.datetime(2026, 11, 10, 12, 0, tzinfo=HKT)
     prompt = get_system_prompt(engine=None, now=now)
     assert (
         "weather_station.station_code = 'wx_' || air_quality_station.station_code"
         in prompt
     )
-    # The rule is prose; it must not become a copied truth query.
+    assert "paired_hourly_weather:" in prompt
+    assert "hourly weather already paired to each AQ station" in prompt
+    assert "If you cannot resolve the question, set `ANSWER = None`" in prompt
+    assert "`exit()` or `quit()`" in prompt
+    # The new text is prose; it must not become a copied truth query.
     for case in hk_baseline_v2.CASES:
         assert case.truth_sql.strip() not in prompt
 

@@ -41,9 +41,11 @@ from core.runtime import PythonRuntime
 from domains.hk.roles import COORDINATOR_SYSTEM, MULTI_RULES, ROLE_PROMPTS
 from domains.hk.schema_prompt import get_system_prompt
 from domains.hk.tools import build_runtime
+from domains.hk.viz import EChartsConfigManager
 from evals.hk_baseline_v2 import ANSWER_HINT
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
+REFERENCE_PATH = Path(__file__).resolve().parents[1] / "docs" / "tai_po_reference.json"
 
 REQUEST_TIMEOUT_SECONDS = 600.0
 HEARTBEAT_SECONDS = 15.0
@@ -426,6 +428,45 @@ async def _stream_chat(
         guard.observe()
 
 
+def build_reference_payload() -> dict[str, Any]:
+    """Load the committed deterministic reference and attach chart configs.
+
+    This is deliberately file-only: no model call and no database connection.
+    The browser can therefore show the paper-target reference even when the
+    live agent fails.
+    """
+    payload = json.loads(REFERENCE_PATH.read_text(encoding="utf-8"))
+    observed = payload.get("observed") or {}
+    anomaly = payload.get("anomaly_assessment") or {}
+
+    charts = EChartsConfigManager()
+    charts.bar(
+        "Matched-hour NO2: event vs preceding 14 days",
+        ["14-day mean", "14-day max", "Event 20:00"],
+        {
+            "NO2": [
+                anomaly.get("matched_hour_mean"),
+                anomaly.get("matched_hour_max_prev_14d"),
+                observed.get("no2_at_2000"),
+            ]
+        },
+        "NO2 (ug/m3)",
+    )
+    charts.bar(
+        "PM2.5 evening rise: Tai Po vs other 17",
+        ["Tai Po", "Other 17 mean"],
+        {
+            "PM2.5 rise": [
+                anomaly.get("nearest_station_pm25_rise"),
+                anomaly.get("network_pm25_mean_rise_other_17"),
+            ]
+        },
+        "PM2.5 rise (ug/m3)",
+    )
+    payload["charts"] = charts.charts
+    return payload
+
+
 def create_app(
     *,
     runtime_factory: RuntimeFactory = build_runtime,
@@ -476,6 +517,16 @@ def create_app(
             "model": os.environ.get("LLM_MODEL"),
             "timeout_seconds": timeout_seconds,
         }
+
+    @app.get("/api/reference/tai_po")
+    async def reference_tai_po() -> JSONResponse:
+        try:
+            return JSONResponse(build_reference_payload())
+        except (OSError, json.JSONDecodeError) as error:
+            return JSONResponse(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                content={"error": f"reference snapshot unavailable: {error}"},
+            )
 
     @app.post("/api/chat", response_model=None)
     async def chat(payload: ChatRequest, request: Request) -> StreamingResponse | JSONResponse:

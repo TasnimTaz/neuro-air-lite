@@ -14,9 +14,10 @@ import os
 import threading
 import time
 
+import pytest
 from fastapi.testclient import TestClient
 
-from api.app import BusyGate, create_app
+from api.app import BusyGate, build_reference_payload, create_app
 from core.runtime import PythonRuntime
 from domains.hk.viz import EChartsConfigManager
 
@@ -355,3 +356,26 @@ def test_static_ui_and_health_are_served():
     assert health.json()["degraded"] is False
     assert health.json()["arm_default"] == "single"
     assert health.json()["busy"] is False
+
+
+def test_reference_endpoint_serves_snapshot_and_chart_configs_without_a_model():
+    _, client = _client(ScriptedLLM([]))
+    response = client.get("/api/reference/tai_po")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["name"] == "tai_po_fire_reference"
+    assert payload["ok"] is True
+    assert payload["observed"]["no2_at_2000"] == 123.2
+    assert payload["anomaly_assessment"]["matched_hour_z"] == pytest.approx(1.9106, abs=0.001)
+    assert payload["anomaly_assessment"]["supports_local_plume"] == "false"
+    assert len(payload["charts"]) == 2
+    assert payload["charts"][0]["option"]["series"][0]["type"] == "bar"
+    assert payload["charts"][1]["title"] == "PM2.5 evening rise: Tai Po vs other 17"
+
+
+def test_reference_payload_is_file_only():
+    payload = build_reference_payload()
+    assert payload["ok"] is True
+    assert payload["charts"]
+    assert "no LLM" not in json.dumps(payload["charts"])  # configs only, no prompt text

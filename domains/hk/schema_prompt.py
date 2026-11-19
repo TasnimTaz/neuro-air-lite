@@ -6,9 +6,9 @@ only enum *type* names (e.g. `air_quality_station_type_enum`), not labels
 description with a startup assertion (`validate_schema`) keeps the detail without
 letting it drift.
 
-Only the 6 populated tables are exposed. Empty tables are deliberately omitted:
-a query against an empty table returns a silent 0, which is harder to diagnose
-than a missing-table error.
+Only the 6 populated tables and the paired weather view are exposed. Empty
+tables are deliberately omitted: a query against an empty table returns a silent
+0, which is harder to diagnose than a missing-table error.
 
 Knowledge-base sources (accessed 2026-11-09):
 
@@ -87,6 +87,19 @@ SCHEMA: dict[str, tuple[Column, ...]] = {
         Column("wind_degree", "double precision", "degrees, 0=N clockwise; NULL when calm"),
         Column("wind_direction", "wind_direction_enum", "'N' | 'NE' | 'E' | 'SE' | 'S' | 'SW' | 'W' | 'NW'; NULL calm"),
     ),
+    "paired_hourly_weather": (
+        Column("aq_station_id", "integer", "air_quality_station.id", False),
+        Column("aq_station_code", "varchar(20)", "e.g. 'taipo'", False),
+        Column("aq_station_name", "varchar(200)", "display name, e.g. 'Tai Po'", False),
+        Column("datetime", "timestamp", "HKT, naive, hourly"),
+        Column("temperature", "double precision", "deg C, ERA5"),
+        Column("humidity", "double precision", "percent, ERA5"),
+        Column("pressure", "double precision", "hPa, ERA5"),
+        Column("wind_speed", "double precision", "m/s, HKO 10-minute folded to hourly"),
+        Column("wind_gust", "double precision", "m/s, max 10-minute gust in the hour"),
+        Column("wind_degree", "double precision", "degrees, 0=N clockwise; NULL when calm"),
+        Column("wind_direction", "wind_direction_enum", "'N' | 'NE' | 'E' | 'SE' | 'S' | 'SW' | 'W' | 'NW'; NULL calm"),
+    ),
     "osm_feature": (
         Column("id", "integer", "PK", False),
         Column("name", "varchar(255)", "feature name, often bilingual"),
@@ -134,6 +147,14 @@ HIDDEN_COLUMNS: dict[str, dict[str, str]] = {
 
 POPULATED_TABLES = list(SCHEMA)
 
+# One description line per relation that is a view rather than a base table.
+SCHEMA_NOTES: dict[str, str] = {
+    "paired_hourly_weather": (
+        "hourly weather already paired to each AQ station; use this instead of "
+        "joining hourly_station_weather by station_id"
+    ),
+}
+
 
 DOMAIN_RULES = """HONG KONG DOMAIN RULES:
 - Identify a station by `name_en` or `station_code`; join hourly tables on `station_id`; never hard-code ids.
@@ -163,6 +184,8 @@ DOMAIN_RULES = """HONG KONG DOMAIN RULES:
 - If a query returns 0 rows, recheck the filter and time window first. If the station or date does not exist,
   or is outside the data coverage below, say the question cannot be answered; never substitute another
   station or date.
+- If you cannot resolve the question, set `ANSWER = None` and explain in the final text; never call
+  `exit()` or `quit()`.
 - AQHI is the official EPD index; `aqhi_level` is authoritative. Never recompute AQHI from pollutants."""
 
 
@@ -276,6 +299,8 @@ def render_schema() -> str:
                 piece += f" ({column.note})"
             parts.append(piece)
         lines.append(f"{table}: " + "; ".join(parts) + ".")
+        if table in SCHEMA_NOTES:
+            lines.append(f"{table} description: {SCHEMA_NOTES[table]}.")
     lines.append("</database_schema>")
     return "\n".join(lines)
 

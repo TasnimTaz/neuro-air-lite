@@ -23,6 +23,10 @@
   const traceNavBadge = document.getElementById("trace-nav-badge");
   const chartsNavBadge = document.getElementById("charts-nav-badge");
   const bcCurrent = document.getElementById("bc-current");
+  const referenceBody = document.getElementById("reference-body");
+  const referenceCharts = document.getElementById("reference-charts");
+  const referenceStatus = document.getElementById("reference-status");
+  const referenceCaveat = document.getElementById("reference-caveat");
 
   // Matrix Elements
   const matrixOverlay = document.getElementById("matrix-overlay");
@@ -33,6 +37,7 @@
   const hudStep = document.getElementById("hud-step");
 
   let chartInstances = [];
+  let referenceChartInstances = [];
   let running = false;
   let traceEventsCount = 0;
   let activeRole = null;
@@ -523,6 +528,130 @@
     }
   }
 
+  function disposeReferenceCharts() {
+    for (const chart of referenceChartInstances) {
+      try { chart.dispose(); } catch (_) {}
+    }
+    referenceChartInstances = [];
+  }
+
+  function referenceNumber(value, digits) {
+    if (typeof value !== "number" || !Number.isFinite(value)) return "n/a";
+    return value.toFixed(digits);
+  }
+
+  function addReferenceCard(grid, label, value, unit, tag) {
+    const card = document.createElement("div");
+    card.className = "kpi-card";
+    const labelEl = document.createElement("div");
+    labelEl.className = "kpi-label";
+    labelEl.textContent = label;
+    const row = document.createElement("div");
+    row.className = "kpi-value-row";
+    const valueEl = document.createElement("span");
+    valueEl.className = "kpi-num";
+    valueEl.textContent = value;
+    row.appendChild(valueEl);
+    if (unit) {
+      const unitEl = document.createElement("span");
+      unitEl.className = "kpi-unit";
+      unitEl.textContent = unit;
+      row.appendChild(unitEl);
+    }
+    const tagEl = document.createElement("span");
+    tagEl.className = "kpi-tag";
+    tagEl.textContent = tag;
+    card.appendChild(labelEl);
+    card.appendChild(row);
+    card.appendChild(tagEl);
+    grid.appendChild(card);
+  }
+
+  function renderReferenceCharts(charts) {
+    if (!referenceCharts) return;
+    disposeReferenceCharts();
+    referenceCharts.replaceChildren();
+    if (!Array.isArray(charts)) return;
+    for (const chart of charts) {
+      const host = document.createElement("div");
+      host.className = "reference-chart-box";
+      referenceCharts.appendChild(host);
+      if (typeof window.echarts !== "undefined") {
+        const instance = window.echarts.init(host, "dark", { renderer: "canvas" });
+        const opt = chart.option || chart;
+        opt.backgroundColor = "transparent";
+        instance.setOption(opt);
+        referenceChartInstances.push(instance);
+      }
+    }
+  }
+
+  function renderReference(payload) {
+    if (!referenceBody) return;
+    const observed = payload.observed || {};
+    const anomaly = payload.anomaly_assessment || {};
+    const rawNo2 = anomaly.raw_ratio_by_pollutant ? anomaly.raw_ratio_by_pollutant.NO2 : anomaly.raw_ratio;
+
+    referenceBody.replaceChildren();
+    const grid = document.createElement("div");
+    grid.className = "kpi-grid";
+    addReferenceCard(grid, "NO2 at 20:00", referenceNumber(observed.no2_at_2000, 1), "ug/m3", "fixed window");
+    addReferenceCard(grid, "Matched-hour z", referenceNumber(anomaly.matched_hour_z, 3), "", "paper ~1.9");
+    addReferenceCard(grid, "Matched-hour max (14d)", referenceNumber(anomaly.matched_hour_max_prev_14d, 1), "ug/m3", "paper 125.5");
+    addReferenceCard(grid, "Network NO2 rise (other 17)", referenceNumber(anomaly.network_mean_rise, 1), "ug/m3", "paper ~+19.6");
+    addReferenceCard(grid, "Tai Po PM2.5 excess", referenceNumber(anomaly.nearest_station_rise_vs_network, 1), "ug/m3", "paper ~+7.4");
+    addReferenceCard(grid, "PM2.5 rank of nearest", referenceNumber(anomaly.pm25_rank_of_nearest, 0), "of 18", "paper 1st");
+    addReferenceCard(grid, "Raw ratio (NO2)", referenceNumber(rawNo2, 2) + "x", "", "screening only");
+    addReferenceCard(grid, "Raw ratio (PM2.5)", referenceNumber(anomaly.raw_ratio_by_pollutant ? anomaly.raw_ratio_by_pollutant["PM2.5"] : null, 2) + "x", "", "screening only");
+    addReferenceCard(grid, "Supports local plume", String(anomaly.supports_local_plume || "unknown"), "", "rule-based");
+    referenceBody.appendChild(grid);
+
+    const summary = document.createElement("p");
+    summary.className = "reference-summary";
+    summary.textContent = "Anomaly assessment: raw ratio " +
+      referenceNumber(rawNo2, 2) + "x (NO2) vs matched-hour z " +
+      referenceNumber(anomaly.matched_hour_z, 3) + "; network NO2 rise " +
+      referenceNumber(anomaly.network_mean_rise, 1) + " ug/m3; supports_local_plume = " +
+      String(anomaly.supports_local_plume || "unknown") + ".";
+    referenceBody.appendChild(summary);
+
+    renderReferenceCharts(payload.charts);
+    if (referenceCaveat) {
+      referenceCaveat.textContent = anomaly.caveat ||
+        "The peak-to-mean ratio is a screening signal, not causal attribution.";
+    }
+    if (referenceStatus) {
+      referenceStatus.textContent = payload.ok ? "Reference 21/21 checks" : "Reference degraded";
+      referenceStatus.className = "chip " + (payload.ok ? "chip-success" : "chip-neutral");
+    }
+  }
+
+  function renderReferenceError(message) {
+    if (referenceBody) {
+      referenceBody.replaceChildren();
+      const paragraph = document.createElement("p");
+      paragraph.className = "reference-summary";
+      paragraph.textContent = "Reference unavailable: " + message;
+      referenceBody.appendChild(paragraph);
+    }
+    if (referenceStatus) {
+      referenceStatus.textContent = "Unavailable";
+      referenceStatus.className = "chip chip-neutral";
+    }
+  }
+
+  async function loadReference() {
+    if (!referenceBody) return;
+    try {
+      const response = await fetch("/api/reference/tai_po");
+      if (!response.ok) throw new Error("HTTP " + response.status);
+      const payload = await response.json();
+      renderReference(payload);
+    } catch (error) {
+      renderReferenceError(error && error.message ? error.message : String(error));
+    }
+  }
+
   async function handleEvent(name, data) {
     switch (name) {
       case "start":
@@ -701,5 +830,7 @@
   form.addEventListener("submit", runQuery);
   window.addEventListener("resize", () => {
     chartInstances.forEach(c => c.resize());
+    referenceChartInstances.forEach(c => c.resize());
   });
+  loadReference();
 })();

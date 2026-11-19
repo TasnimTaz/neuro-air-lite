@@ -474,6 +474,31 @@ textarea:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 15
   padding: 0.5rem;
 }
 
+/* Deterministic reference (file-backed, no model, no DB) */
+.reference-card { margin-top: 1.2rem; }
+.reference-intro { font-size: 0.84rem; color: var(--text-muted); margin-bottom: 1rem; }
+.reference-intro code { font-family: var(--font-mono); color: var(--primary); }
+.reference-body { min-height: 80px; }
+.reference-summary { font-size: 0.88rem; color: #cbd5e1; margin: 0.2rem 0 1rem; }
+.reference-charts { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 1rem; }
+.reference-chart-box {
+  width: 100%;
+  height: 300px;
+  background: #0d121f;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  padding: 0.5rem;
+}
+.reference-caveat {
+  margin-top: 1rem;
+  padding: 0.8rem 1rem;
+  border-left: 3px solid var(--rose);
+  background: rgba(244, 63, 94, 0.08);
+  color: #fecdd3;
+  font-size: 0.85rem;
+  border-radius: var(--radius-sm);
+}
+
 .error-box { margin-top: 1rem; padding: 1rem; border-radius: var(--radius-md); background: rgba(244, 63, 94, 0.1); border: 1px solid rgba(244, 63, 94, 0.3); color: #fb7185; }
 
 /* ==================== LIVE MULTI-AGENT MATRIX OVERLAY ==================== */

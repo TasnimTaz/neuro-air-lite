@@ -1179,11 +1179,10 @@ returns 24 rows for Tai Po on 2025-11-26; the 20:00 row is PM2.5 35.7, NO2
 123.2, AQHI 5, wind 0.389 m/s from 206.6 deg (SW).
 
 This is the paired-weather join failure, not evidence that the data is absent.
-Do not edit the evaluated prompt now. The recommended Day 9/10 fix is a
-read-only DB view (for example `station_hourly_joined`) that exposes the tested
-code-prefix mapping and the `station_id`/`datetime` join, plus a regression
-test. If the prompt is revised instead, a v4 must restate the join rule and show
-the working example. The transcripts are in
+The Day 7 recommendation was a read-only DB view exposing the tested code-prefix
+mapping plus a regression test; v4 implements that as
+`paired_hourly_weather` and also supersedes the earlier prompt freeze for
+`domains/hk/schema_prompt.py`. The transcripts are in
 `runs/demo/day8_live/manifest.json` and `runs/demo/day8_live.log` (gitignored).
 
 ## Day 8: deterministic Tai Po reference and daemon
@@ -1283,10 +1282,12 @@ database rows. It is not the Day 10 execution isolation boundary.
 ### Agent-to-reference replication
 
 `scripts/compare_agent_to_reference.py` is a separate, non-frozen replication
-check. It asks the v3 **single** arm (no workers, no verifier) for exactly eight
-fields under the exact `ANSWER` dictionary contract, three times, and compares
-each field with the deterministic reference computed from the read-only
-database. The evaluated prompt and the scorer are unchanged. The tolerances are
+check. The live run described here asked the v3 **single** arm (no workers, no
+verifier) for exactly eight fields under the exact `ANSWER` dictionary
+contract, three times, and compared each field with the deterministic reference
+computed from the read-only database. The evaluated prompt and the scorer were
+unchanged at that time; the v4 rerun is reported separately below. The
+tolerances are
 0.1 for `no2_at_2000`, `pm25_post_peak`, `matched_hour_z` and
 `matched_hour_max_prev_14d`; 0.2 for `network_mean_rise` and
 `nearest_station_rise_vs_network`; exact integer equality for
@@ -1325,6 +1326,137 @@ full-prompt hash `d23ae723...`; recomputing the base-only hash with the same
 The difference is the merged-role addendum, so the evaluated base prompt was not
 edited. The artifact is `runs/reference_compare/day8_single_3x/run.json`
 (gitignored).
+
+## v4: paired weather view, prompt affordance and deterministic reference UI
+
+This pre-registered v4 supersedes the earlier freeze for
+`domains/hk/schema_prompt.py` only. The cases, truth values, tolerances,
+scorer (`v2`), role prompts, budget (20 steps), repeats (3) and model are
+unchanged. No Day 10 work has started.
+
+### Paired weather view
+
+`scripts/migrate_views.py` creates or replaces the read-only view
+`paired_hourly_weather` with exactly these columns: `aq_station_id`,
+`aq_station_code`, `aq_station_name`, `datetime`, `temperature`, `humidity`,
+`pressure`, `wind_speed`, `wind_gust`, `wind_degree`, `wind_direction`. It
+grants `SELECT` to `neuro_ro`, changes no data, and is idempotent. The correct
+pairing is now a relation instead of a rule the model has to reconstruct:
+
+```sql
+JOIN weather_station ws ON ws.station_code = 'wx_' || a.station_code
+JOIN hourly_station_weather w ON w.station_id = ws.id
+```
+
+The migration run printed `157,680` total rows and `8,760` Tai Po rows.
+`tests/test_paired_view.py` proves that Tai Po has 24 rows on 2025-11-26, that
+the 20:00 row has `wind_speed = 0.389`, and that the old
+`a.station_id = w.station_id` join returns `0` rows for the same window. Those
+tests skip only when the database is unreachable; a reachable database without
+the view is a failure.
+
+### Prompt and hashes
+
+`render_schema()` lists the view with the description line:
+
+> hourly weather already paired to each AQ station; use this instead of joining hourly_station_weather by station_id
+
+The `wx_` join rule is retained. `DOMAIN_RULES` now also says: if you cannot
+resolve the question, set `ANSWER = None` and explain in the final text; never
+call `exit()` or `quit()`. `validate_schema()` includes the view in its live
+column assertion, and `tests/test_prompt_leakage.py` checks that the new text
+does not contain a copied truth query.
+
+The v4 hashes are:
+
+| Artifact | SHA-256 |
+| --- | --- |
+| Base prompt with live data window | `ff04f301a5eebdc041b8e0e58260ab5cd4011729463f94c785e2201dacea585f` |
+| Multi prompts snapshot | `141925a0538b2e039cb0d4ac78589ff0ddd3a99e3e5a27b5cd322976289c23a1` |
+| Merged single-role addendum | `2c0a50e48797d11f7b2b8d416447681eb643e482ac39cc6a0117297c941e641d` |
+
+The multi prompts and merged-role addendum are unchanged from v3; only the base
+prompt changed.
+
+### Premise-trap transcripts
+
+`docs/premise_trap_transcripts.md` transcribes the last live rule-judged run
+(`runs/premise_traps/day6_live/run.json`) without rerunning it. The strict score
+remains primary: **1/10** (`halt` 1/4, `ask clarification` 0/5,
+`state limitation` 0/1). The file includes each question, final text, `ANSWER`
+and strict verdict, plus the caveat that the narrow rules can understate a
+semantically reasonable answer. The reviewer guidance is to use the gate's
+held-out `74.3%` accuracy and nine out-of-scope leaks as an advisory “may be out
+of scope” warning, not a hard block; premise checking stays inside the agent.
+
+### Deterministic reference endpoint and UI
+
+`GET /api/reference/tai_po` returns the committed
+`docs/tai_po_reference.json` plus two deterministic ECharts configs. It reads
+only that file: no LLM call and no database connection. `api/static/index.html`
+adds a “Deterministic reference (no AI)” section, and `api/static/app.js`
+renders the key numbers, the `anomaly_assessment` raw-ratio-versus-z contrast,
+the network rise, `supports_local_plume`, the screening-not-causal caveat and
+the two charts. All dynamic text is assigned through `textContent` or escaped
+before markup; `tests/test_ui_static.py` now asserts this shape.
+
+### v4 matched rerun results
+
+Both arms used the v4 base prompt hash above, the frozen 20-case v2 set, scorer
+`v2`, 3 repeats, a 20-step solver budget, `--resume`, and the same model. The
+single arm used the unchanged merged-role addendum; the multi arm used the
+unchanged multi prompts (verifier mode `overwrite`). The v3 artifacts were kept
+in their original directories.
+
+| Arm | Case-runs | Mean | v1 | v2 | Hold-out | Non-hold-out |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Single + merged roles | 60 | 78.3% (47/60) | 68.3% | 78.3% | 12/18 (66.7%) | 35/42 (83.3%) |
+| Multi overwrite | 60 | 65.0% (39/60) | 63.3% | 65.0% | 10/18 (55.6%) | 29/42 (69.0%) |
+
+The paired task-level test (`evals/compare_arms.py`, primary `v2`) gives multi
+wins **3**, losses **7**, ties **10**, discordant **10**, exact McNemar
+**p=0.3438**; the paired task bootstrap mean difference is **-0.133**, 95% CI
+**[-0.300, +0.033]** (5000 resamples). Multi costs **2.23x** tokens, **2.34x**
+seconds and **3.85x** calls per case. The multi verifier audit is
+wrong→right 25, right→wrong 2, right→right 14, wrong→wrong 19, with pre-verify
+16/60 and final 39/60.
+
+The pre-registered v4 changes did **not** produce a significant multi-arm gain.
+The two arms share the same failures on cases 18 and 20 in all repeats; the
+multi run still wasted budget on malformed weather joins (for example querying
+`no2_ugm3` from `paired_hourly_weather`, which only exposes AQ identifiers and
+meteorology). The offline comparison artifact is
+`runs/multi/day9_v4_budget20_3x/compare.json` (gitignored).
+
+### v4 agent-to-reference replication
+
+`scripts/compare_agent_to_reference.py` was rerun with the v4 single arm
+(base prompt `ff04f301...` plus the unchanged merged-role addendum), 3 repeats,
+20 steps and the same deterministic reference. The first attempt aborted before
+any repeat finished with `httpx2.ReadTimeout` after a 3-minute Ollama POST; the
+server was still alive. It was rerun unchanged and completed 3/3.
+
+The successful run reports `reference ok=True`, **fields 0/24**, **ANSWER dict
+0/3**, **line chart 0/3**, **bar chart 0/3**. Every one of the eight fields was
+`0/3`:
+
+| Field | Matches |
+| --- | ---: |
+| `no2_at_2000` | 0/3 |
+| `pm25_post_peak` | 0/3 |
+| `matched_hour_z` | 0/3 |
+| `matched_hour_max_prev_14d` | 0/3 |
+| `network_mean_rise` | 0/3 |
+| `nearest_station_rise_vs_network` | 0/3 |
+| `pm25_rank_of_nearest` | 0/3 |
+| `wind_speed_2000` | 0/3 |
+
+Repeat durations were 259.2 s, 372.0 s and 113.3 s. Repeats 1-2 stopped under
+the identical-code stall guard; repeat 3 said “Tai Po station not uniquely
+resolved.” The model again never emitted the exact `ANSWER` dictionary or the
+two chart configs. This is a real single-arm failure on the multi-field
+contract, not a reference failure. Artifact:
+`runs/reference_compare/day9_v4_single_3x/run.json` (gitignored).
 
 ## Conventions
 
@@ -1374,6 +1506,7 @@ edited. The artifact is `runs/reference_compare/day8_single_3x/run.json`
 | 4 | schema prompt, geocoder, charts, frozen v2 baseline | done |
 | 5 | coordinator, workers, verifier | implemented; official 3-repeat 41/60 vs single 46/60 (p=0.109; 5.21x tokens) - no gain |
 | 5b | matched-budget multi audit, verifier modes, v3 prompt | v3 rerun done: 40/60 multi vs 45/60 single (p=0.289) - negative; flag 12/42 complete; single-verified 35/42 vs single 34/42 (p=1.000) - not significant; none incomplete (21/42); strong API stopped because all `*_STRONG` variables are unset |
-| 6 | relevance gate, knowledge retrieval, verifier tuning | implemented; live gate calibration theta=0.54, held-out 0.743; live premise traps 1/10 (diagnostic, not a benchmark) |
-| 7 | FastAPI SSE API and ECharts demo UI | implemented; 218 tests pass; timeout-poison 503 guard added; live demo 5/5 HTTP 200: single 4/4 answered, but the multi Tai Po run joined weather on the wrong key, returned no data and the verifier confirmed that wrong answer |
-| 8 | deterministic Tai Po reference, daemon | implemented; reference 21/21 checks, paper targets reproduced, daemon replay 0 triggers; live agent-to-reference 0/24 fields, 0/3 ANSWER dicts, 0/3 charts - single arm failed, reference valid |
+| 6 | relevance gate, knowledge retrieval, verifier tuning | implemented; live gate calibration theta=0.54, held-out 0.743; live premise traps 1/10 (diagnostic, not a benchmark); strict transcripts in `docs/premise_trap_transcripts.md` |
+| 7 | FastAPI SSE API and ECharts demo UI | implemented; 224 tests pass; timeout-poison 503 guard added; live demo 5/5 HTTP 200: single 4/4 answered, but the multi Tai Po run joined weather on the wrong key, returned no data and the verifier confirmed that wrong answer |
+| 8 | deterministic Tai Po reference, daemon | implemented; reference 21/21 checks, paper targets reproduced, daemon replay 0 triggers; live v3 agent-to-reference 0/24 fields, 0/3 ANSWER dicts, 0/3 charts - single arm failed, reference valid |
+| 9 | v4 paired view, prompt affordance, matched rerun, reference UI | done; paired view migration + regression tests, base hash `ff04f301...`, single 47/60 vs multi 39/60 (McNemar p=0.3438), deterministic `/api/reference/tai_po` and UI section; strong-model evaluation still blocked by unset `*_STRONG` credentials; Day 10 not started |

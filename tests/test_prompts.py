@@ -51,6 +51,19 @@ def test_v3_weather_join_is_explicit():
     assert "never use the air-quality" in prompt
 
 
+def test_v4_paired_weather_view_and_abort_rule_are_explicit():
+    prompt = get_system_prompt()
+    assert "paired_hourly_weather:" in prompt
+    assert "hourly weather already paired to each AQ station" in prompt
+    assert "use this instead of joining hourly_station_weather by station_id" in prompt
+    assert "If you cannot resolve the question, set `ANSWER = None`" in prompt
+    assert "never call" in prompt
+    assert "`exit()` or `quit()`" in prompt
+    # The view is declared with the same columns the migration creates.
+    assert "aq_station_code" in prompt
+    assert "wind_direction" in prompt
+
+
 def test_merged_single_role_addendum_is_delimited_and_complete():
     assert MERGED_ROLE_ADDENDUM.startswith("<merged_role_procedures>")
     assert MERGED_ROLE_ADDENDUM.endswith("</merged_role_procedures>")

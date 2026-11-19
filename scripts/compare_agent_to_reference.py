@@ -2,7 +2,7 @@
 
 This is a separate, non-frozen replication check. It does not change the
 evaluated prompt, the scorer, or any baseline artifact. It asks the single arm
-(v3 prompt, no workers, no verifier) for the paper's Tai Po reanalysis fields
+(current v4 prompt, no workers, no verifier) for the paper's Tai Po reanalysis fields
 under an exact ``ANSWER`` dictionary contract, three times, and compares every
 field with the reference computed from the read-only database.
 
@@ -447,7 +447,7 @@ def main(argv: list[str] | None = None) -> int:
             timespec="seconds"
         ),
         "arm": "single",
-        "prompt": "v3 single (base + merged-role addendum)",
+        "prompt": "v4 single (base + merged-role addendum)",
         "base_sha256": base_sha256,
         "single_prompt_sha256": single_prompt_sha256,
         # Kept for compatibility with the first live artifact; this is the

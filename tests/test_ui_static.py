@@ -77,3 +77,20 @@ def test_app_js_markup_templates_escape_dynamic_values() -> None:
 def test_index_html_has_no_dynamic_markup_templates() -> None:
     source = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
     assert find_unsafe_interpolations(source) == []
+
+
+def test_reference_ui_is_static_markup_and_text_content_only() -> None:
+    html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+    js = (STATIC_DIR / "app.js").read_text(encoding="utf-8")
+
+    assert "Deterministic reference (no AI)" in html
+    assert 'id="reference-body"' in html
+    assert 'id="reference-charts"' in html
+    assert 'id="reference-caveat"' in html
+
+    # The reference renderer builds DOM nodes and assigns textContent; it must
+    # not interpolate the file payload into a markup template.
+    assert "referenceBody.replaceChildren()" in js
+    assert "summary.textContent = " in js
+    assert "referenceCaveat.textContent = " in js
+    assert find_unsafe_interpolations(js) == []
