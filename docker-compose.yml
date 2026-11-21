@@ -32,12 +32,14 @@ services:
         condition: service_healthy
     ports:
       - "8000:8000"
+    volumes:
+      - ./api/static:/app/api/static:ro
     env_file:
       - .env
     environment:
       RUNTIME_MODE: ${RUNTIME_MODE:-subprocess}
       MAX_CONCURRENT_RUNS: ${MAX_CONCURRENT_RUNS:-2}
-      DB_URL_RO: "${DB_URL_RO_DOCKER:?set DB_URL_RO_DOCKER in .env with the db service hostname}"
+      DB_URL_RO: "${DB_URL_RO_DOCKER:-postgresql+psycopg2://neuro_ro:neuro_ro_dev_pw@db:5432/airdb}"
       LLM_BASE_URL: ${LLM_BASE_URL_DOCKER:-http://host.docker.internal:11434/v1}
     extra_hosts:
       - "host.docker.internal:host-gateway"
