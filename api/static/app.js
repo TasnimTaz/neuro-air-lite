@@ -574,18 +574,27 @@
     if (!referenceCharts) return;
     disposeReferenceCharts();
     referenceCharts.replaceChildren();
-    if (!Array.isArray(charts)) return;
-    for (const chart of charts) {
+    if (!Array.isArray(charts) || charts.length === 0) return;
+
+    // Append all containers first so the grid establishes column widths
+    const hosts = charts.map(() => {
       const host = document.createElement("div");
       host.className = "reference-chart-box";
       referenceCharts.appendChild(host);
-      if (typeof window.echarts !== "undefined") {
-        const instance = window.echarts.init(host, "dark", { renderer: "canvas" });
+      return host;
+    });
+
+    if (typeof window.echarts !== "undefined") {
+      charts.forEach((chart, idx) => {
+        const instance = window.echarts.init(hosts[idx], "dark", { renderer: "canvas" });
         const opt = chart.option || chart;
         opt.backgroundColor = "transparent";
         instance.setOption(opt);
         referenceChartInstances.push(instance);
-      }
+      });
+      setTimeout(() => {
+        referenceChartInstances.forEach(c => c.resize());
+      }, 60);
     }
   }
 
