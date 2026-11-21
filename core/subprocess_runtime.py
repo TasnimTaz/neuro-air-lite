@@ -1,14 +1,20 @@
 """Spawned subprocess runtime with an RPC namespace proxy.
 
 This is the Day 10 execution layer. The in-process runtime in ``core.runtime``
-is still the evaluation default and is byte-for-byte unchanged; this module adds
-an alternative used by the API when ``RUNTIME_MODE=subprocess``.
+is still the evaluation default and is byte-for-byte unchanged; this module
+adds an alternative used by the API when ``RUNTIME_MODE=subprocess``.
 
-What it isolates: model-written code executes in a child process with a scrubbed
-environment and a fresh empty working directory. The child receives only the
-read-only DSN plus the minimum OS variables, creates its own SQLAlchemy engine,
-captures its own stdout, and answers over a Pipe. A wall-clock timeout kills the
-child; the next execute starts a fresh child and staged state is lost.
+The child is launched with ``subprocess.Popen`` so the scrubbed environment is
+set at exec time. This works the same way on Windows and POSIX: replacing the
+parent's ``os.environ`` was only sufficient for the Windows venv spawn path and
+leaked the real environment on Linux. The parent environment is never mutated.
+
+What it isolates: model-written code executes in a child process with a
+scrubbed environment and a fresh empty working directory. The child receives
+only the read-only DSN plus the minimum OS variables, creates its own SQLAlchemy
+engine, captures its own stdout, and answers over an authenticated
+``multiprocessing.connection``. A wall-clock timeout kills the child; the next
+execute starts a fresh child and staged state is lost.
 
 What it does NOT isolate: the child runs as the same OS user, can still reach the
 Postgres network endpoint, and is not a container sandbox. The AST checker is
@@ -17,17 +23,21 @@ still only a guard rail; the read-only DB role is the real data boundary.
 
 from __future__ import annotations
 
+import ast
 import contextlib
 import importlib
 import io
-import multiprocessing
 import os
 import shutil
+import socket
+import subprocess
+import sys
 import tempfile
 import threading
 import time
 import traceback
 import types
+from multiprocessing.connection import Client, Listener
 from pathlib import Path
 from typing import Any
 
@@ -38,27 +48,28 @@ ROOT = Path(__file__).resolve().parents[1]
 MAX_STDOUT_CHARS = 20_000
 READY_TIMEOUT_SECONDS = 30.0
 RPC_TIMEOUT_SECONDS = 60.0
+LISTEN_HOST = "127.0.0.1"
 
-# Windows needs these for the interpreter and TLS to work. Deliberately absent:
-# DB_URL_ADMIN, POSTGRES_*, NEURO_ADMIN_ENV, LLM_*, EMBED_*.
+# Allowlisted keys only. Deliberately absent: DB_URL_ADMIN, POSTGRES_*,
+# NEURO_ADMIN_ENV, LLM_*, EMBED_*, and the repo HOME path on POSIX.
 OS_ENV_KEYS = (
     "SystemRoot",
-    "TMP",
     "TEMP",
-    "USERPROFILE",
-    "APPDATA",
-    "LOCALAPPDATA",
+    "TMP",
+    "TMPDIR",
     "COMSPEC",
     "PATHEXT",
     "PATH",
     "NUMBER_OF_PROCESSORS",
     "PROCESSOR_ARCHITECTURE",
     "OS",
+    "LANG",
+    "LC_ALL",
+    "LC_CTYPE",
     "SSL_CERT_FILE",
     "SSL_CERT_DIR",
 )
 
-_ENV_START_LOCK = threading.Lock()
 _MISSING = object()
 
 
@@ -68,21 +79,27 @@ def _truncate(text: str) -> str:
     return text[:MAX_STDOUT_CHARS] + "\n... [truncated]"
 
 
-def _child_entry(
-    builder_ref: str,
-    conn: Any,
-    statement_timeout_ms: int | None,
-    tempdir: str,
-) -> None:
-    """Child process entry point. Never calls the parent-side AST checker."""
+def _proc_environ_keys() -> list[str] | None:
+    """Read the real /proc environ, not just os.environ, when available."""
+    path = Path("/proc/self/environ")
+    if not path.exists():
+        return None
+    keys = set()
+    for item in path.read_bytes().split(b"\0"):
+        if b"=" in item:
+            keys.add(item.split(b"=", 1)[0].decode("utf-8", "replace"))
+    return sorted(keys)
+
+
+def _child_loop(conn: Any, builder_ref: str, statement_timeout_ms: int | None) -> None:
+    """Child process loop. Never calls the parent-side AST checker."""
     try:
-        os.chdir(tempdir)
         module_name, attr = builder_ref.split(":", 1)
         builder = getattr(importlib.import_module(module_name), attr)
         ns: dict[str, Any] = builder(statement_timeout_ms=statement_timeout_ms)
         injected = set(ns)
         conn.send({"ok": True})
-    except BaseException:  # pragma: no cover - startup failure is surfaced in parent
+    except BaseException:
         conn.send({"ok": False, "error": traceback.format_exc()})
         conn.close()
         return
@@ -191,6 +208,10 @@ def _child_entry(
             conn.send({"ok": True, "result": sorted(os.environ)})
             continue
 
+        if op == "proc_environ_keys":
+            conn.send({"ok": True, "result": _proc_environ_keys()})
+            continue
+
         if op == "cwd_probe":
             conn.send(
                 {
@@ -203,6 +224,34 @@ def _child_entry(
         conn.send({"ok": False, "error": f"unknown op: {op}"})
 
     conn.close()
+
+
+def _child_cli(argv: list[str] | None = None) -> None:
+    """Entry point for ``python -m core.subprocess_runtime``."""
+    parser = argparse_parser()
+    args = parser.parse_args(argv)
+    timeout_raw = int(args.statement_timeout_ms)
+    conn = Client(
+        (args.host, int(args.port)),
+        authkey=bytes.fromhex(args.authkey),
+    )
+    try:
+        _child_loop(conn, args.builder, timeout_raw or None)
+    finally:
+        with contextlib.suppress(OSError):
+            conn.close()
+
+
+def argparse_parser():  # small helper so tests can import the parser if needed
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Neuro-Air Lite child runtime")
+    parser.add_argument("--host", required=True)
+    parser.add_argument("--port", required=True)
+    parser.add_argument("--authkey", required=True)
+    parser.add_argument("--builder", required=True)
+    parser.add_argument("--statement-timeout-ms", default="0")
+    return parser
 
 
 class RPCError(RuntimeError):
@@ -310,6 +359,17 @@ class _NamespaceProxy:
         raise KeyError(key)
 
 
+def _terminate_process(process: subprocess.Popen[bytes]) -> None:
+    if process.poll() is not None:
+        return
+    process.terminate()
+    try:
+        process.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait(timeout=5)
+
+
 class SubprocessRuntime:
     """Spawn-backed runtime with the same public surface as ``PythonRuntime``."""
 
@@ -328,8 +388,9 @@ class SubprocessRuntime:
         self.memory_limit_mb = memory_limit_mb
         self.statement_timeout_ms = statement_timeout_ms
         self.ns = _NamespaceProxy(self)
-        self._child: Any | None = None
+        self._proc: subprocess.Popen[bytes] | None = None
         self._conn: Any | None = None
+        self._listener: Any | None = None
         self._tempdir: str | None = None
         self._lock = threading.RLock()
         self._kill_lock = threading.Lock()
@@ -346,52 +407,91 @@ class SubprocessRuntime:
         env["PYTHONPATH"] = str(ROOT) + (os.pathsep + pythonpath if pythonpath else "")
         return env
 
+    @staticmethod
+    def _read_stderr(process: subprocess.Popen[bytes] | None) -> str:
+        if process is None or process.stderr is None:
+            return ""
+        with contextlib.suppress(OSError):
+            data = process.stderr.read()
+            return data.decode("utf-8", "replace")[:1000]
+        return ""
+
     def _start_child(self) -> None:
         self._tempdir = tempfile.mkdtemp(prefix="neuro-air-child-")
-        context = multiprocessing.get_context("spawn")
-        parent_conn, child_conn = context.Pipe(duplex=True)
-        process = context.Process(
-            target=_child_entry,
-            args=(self.builder_ref, child_conn, self.statement_timeout_ms, self._tempdir),
-            daemon=True,
-        )
+        authkey = os.urandom(16)
+        listener = Listener((LISTEN_HOST, 0), authkey=authkey)
+        host, port = listener.address
+        self._listener = listener
+        command = [
+            sys.executable,
+            "-m",
+            "core.subprocess_runtime",
+            "--host",
+            str(host),
+            "--port",
+            str(port),
+            "--authkey",
+            authkey.hex(),
+            "--builder",
+            self.builder_ref,
+            "--statement-timeout-ms",
+            str(self.statement_timeout_ms or 0),
+        ]
         env = self._child_environment()
-        # Spawn snapshots os.environ when start() is called. Replacing the
-        # mapping briefly under a lock keeps the parent's live environment
-        # unchanged for other threads.
-        with _ENV_START_LOCK:
-            original = os.environ
-            os.environ = env  # type: ignore[assignment]
-            try:
-                process.start()
-            finally:
-                os.environ = original  # type: ignore[assignment]
-        child_conn.close()
-        self._child = process
-        self._conn = parent_conn
-        if not parent_conn.poll(READY_TIMEOUT_SECONDS):
+        process = subprocess.Popen(
+            command,
+            env=env,
+            cwd=self._tempdir,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            close_fds=True,
+        )
+        self._proc = process
+        try:
+            sock = getattr(listener._listener, "_socket", None) or getattr(
+                listener._listener, "socket", None
+            )
+            if sock is not None:
+                sock.settimeout(READY_TIMEOUT_SECONDS)
+            conn = listener.accept()
+        except (TimeoutError, socket.timeout, OSError) as error:
+            detail = self._read_stderr(process)
+            _terminate_process(process)
+            listener.close()
+            self._proc = None
+            self._listener = None
+            raise RPCError(f"child did not connect: {error}; stderr={detail}") from error
+        finally:
+            listener.close()
+            self._listener = None
+        self._conn = conn
+        if not conn.poll(READY_TIMEOUT_SECONDS):
+            detail = self._read_stderr(process)
             self._kill_child()
-            raise RPCError("child did not become ready")
-        ready = parent_conn.recv()
+            raise RPCError(f"child did not become ready; stderr={detail}")
+        ready = conn.recv()
         if not ready.get("ok"):
             self._kill_child()
             raise RPCError(f"child startup failed: {ready.get('error')}")
 
     def _ensure_child(self) -> None:
-        if self._child is None or self._conn is None:
+        if self._proc is None or self._conn is None:
             self._start_child()
 
     def _kill_child(self) -> None:
         with self._kill_lock:
-            process = self._child
-            if process is not None and process.is_alive():
-                process.kill()
-                process.join(timeout=5)
+            process = self._proc
+            if process is not None:
+                _terminate_process(process)
+                if process.stderr is not None:
+                    with contextlib.suppress(OSError):
+                        process.stderr.close()
             conn = self._conn
             if conn is not None:
                 with contextlib.suppress(OSError):
                     conn.close()
-            self._child = None
+            self._proc = None
             self._conn = None
 
     def _rpc(self, message: dict[str, Any], timeout: float = RPC_TIMEOUT_SECONDS) -> dict[str, Any]:
@@ -409,8 +509,9 @@ class SubprocessRuntime:
             try:
                 return self._conn.recv()
             except (EOFError, OSError) as error:
+                detail = self._read_stderr(self._proc)
                 self._kill_child()
-                raise RPCError(f"child exited: {error}") from error
+                raise RPCError(f"child exited: {error}; stderr={detail}") from error
 
     # ------------------------------------------------------------- public API
     def execute(self, code: str, first_attempt: bool = True) -> ExecResult:
@@ -435,8 +536,8 @@ class SubprocessRuntime:
 
                 def watch_memory() -> None:
                     while not stop.wait(0.2):
-                        process = self._child
-                        if process is None or not process.is_alive():
+                        process = self._proc
+                        if process is None or process.poll() is not None:
                             return
                         try:
                             rss = psutil.Process(process.pid).memory_info().rss
@@ -490,6 +591,10 @@ class SubprocessRuntime:
                     self._conn.send({"op": "close"})
                     self._conn.poll(2.0)
             self._kill_child()
+            if self._listener is not None:
+                with contextlib.suppress(OSError):
+                    self._listener.close()
+                self._listener = None
             if self._tempdir:
                 with contextlib.suppress(OSError):
                     shutil.rmtree(self._tempdir, ignore_errors=True)
@@ -500,3 +605,7 @@ class SubprocessRuntime:
 
     def __exit__(self, *exc_info: object) -> None:
         self.close()
+
+
+if __name__ == "__main__":
+    _child_cli()

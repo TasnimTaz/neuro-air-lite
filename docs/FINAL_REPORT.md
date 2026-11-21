@@ -123,26 +123,51 @@ for #20. Some recorded passes came from a staged numeric `ANSWER` whose
 `final_text` was the identical-code stop sentinel or even contradicted the
 answer (`docs/never_solved_cases.md:339-343`).
 
+One small-n signal is worth recording separately. Case #15 asks for days whose
+*daily average* PM2.5 exceeded 30. Across the six archived runs it passed only
+in the multi arm: **5/9** multi slots versus **0/9** single slots
+(`docs/never_solved_cases.md:61-69`). The qualitative audit attributes the
+repair to the verifier's recompute of the aggregation grain
+(`docs/never_solved_cases.md:144-198`). This is one case, and the overall paired
+test is not significant, so it is a hypothesis for a stronger-model rerun, not
+a claim that the multi arm generally helps.
+
 ## 4. Isolation: what it covers and what it does not
 
 `RUNTIME_MODE=subprocess` is the API default (`api/app.py:55,496-500`). The
-child is started with Windows spawn, receives a builder reference, creates its
-own engine from `DB_URL_RO`, captures its own stdout, and replies over a Pipe
-(`core/subprocess_runtime.py:71,313,416`). The parent runs `check_code()` before
-sending anything. The child environment allowlist is `OS_ENV_KEYS` plus
-`DB_URL_RO` (`core/subprocess_runtime.py:44`); the cwd is a fresh temp dir;
-output is truncated at 20,000 characters (`core/subprocess_runtime.py:38`);
-timeout kills the child and the next execute starts fresh.
+child is launched with
+`subprocess.Popen([sys.executable, "-m", "core.subprocess_runtime", ...],
+env=scrubbed, cwd=<fresh temp dir>, close_fds=True)`
+(`core/subprocess_runtime.py:419,441-449`). The scrubbed mapping is built at
+exec time from `OS_ENV_KEYS` plus `DB_URL_RO` and `PYTHONPATH=ROOT`
+(`:55,400-408`). The parent's `os.environ` is never swapped and the old global
+lock is gone; this was the Linux/Docker bug in the earlier implementation.
+The child connects back over an authenticated `multiprocessing.connection`
+Listener/Client on `127.0.0.1` with a random port and random authkey
+(`:428-457`). The parent still runs `check_code()` before sending anything.
+Output is truncated at 20,000 characters (`:48`), and timeout kills the child
+so the next execute starts fresh.
 
-Verified tests:
+`docker-compose.yml:35-36` passes the whole repo `.env` into the API container
+parent, which includes any future `LLM_*_STRONG` key. The exec-time allowlist is
+what stops those keys from reaching model-written code; this is now enforced on
+both Windows and Linux.
+
+Verified tests (Windows host and Linux container):
 
 - State, manifest, namespace proxy, engine URL proxy:
   `tests/test_subprocess_runtime.py:51,58,66,80`.
 - Timeout kills child and later execute works: `:84`.
-- No `DB_URL_ADMIN` / `LLM_API_KEY_STRONG` in child; no `.env` in cwd: `:99,109`.
-- AST checker rejects before any RPC: `:115`.
-- Two children do not mix stdout; large output truncated: `:133,159`.
-- Live read-only role can SELECT, cannot INSERT after `25006` is lifted: `:166`.
+- Child `os.environ` contains no `DB_URL_ADMIN`, `POSTGRES_*`, `LLM_*`,
+  `EMBED_*` or `NEURO_ADMIN_ENV`: `:99,119`.
+- On Linux, the child's real `/proc/self/environ` also contains none of those
+  keys: `:129`.
+- The parent `os.environ` equals its pre-start snapshot while a child starts:
+  `:141`.
+- No `.env` in the fresh child cwd: `:155`.
+- AST checker rejects before any RPC: `:161`.
+- Two children do not mix stdout; large output truncated: `:179,205`.
+- Live read-only role can SELECT, cannot INSERT after `25006` is lifted: `:212`.
 - Infinite loop does not hang the API and does not poison it:
   `tests/test_api.py:410`.
 - Concurrency limit 2 replaces single-flight in subprocess mode:
@@ -160,14 +185,41 @@ the unchanged `core/runtime.py`; its poison guard is kept for
 
 ## 5. Test output
 
-Command: `uv run pytest -q`, with the database running.
+Full suite on the Windows host, with the database running:
 
 ```
+uv run pytest -q
 ........................................................................ [ 30%]
 ........................................................................ [ 60%]
-........................................................................ [ 91%]
-.....................                                                    [100%]
-237 passed in 23.69s
+...........................................................s............ [ 90%]
+.......................                                                  [100%]
+238 passed, 1 skipped in 28.41s
+```
+
+The one skip is the Linux-only `/proc/self/environ` check
+(`tests/test_subprocess_runtime.py:129`). The subprocess file alone on the same
+host reported `11 passed, 2 skipped in 13.99s`; the second skip was the DB-live
+test because the database was stopped at that moment.
+
+The same file was then run inside the freshly rebuilt Linux `api` container
+with the database healthy. pytest was already available through the image's
+`uv` environment; no throwaway layer was needed. Command and result:
+
+```powershell
+$env:DB_URL_RO_DOCKER = uv run python -c "from dotenv import dotenv_values; u=dotenv_values('.env')['DB_URL_RO']; print(u.replace('127.0.0.1','db',1).replace('localhost','db',1))"
+docker compose --env-file .env --env-file "$HOME\.neuro-air\admin.env" run --rm api uv run pytest -q -rs tests/test_subprocess_runtime.py
+```
+
+```
+ Container neuroair-db Running
+ Container neuroair-db Waiting
+ Container neuroair-db Healthy
+ Container neuro-air-lite-api-run-f3e9d32f7949 Creating
+ Container neuro-air-lite-api-run-f3e9d32f7949 Created
+Installed 1 package in 4ms
+.............                                                            [100%]
+13 passed in 10.39s
+container_test_exit=0
 ```
 
 Earlier in the session, with the database stopped, the same suite reported
@@ -259,7 +311,13 @@ Start-Process http://localhost:8000/
 ## 9. Unverified items and gaps
 
 - Strong-model evaluation: not run; all three `*_STRONG` variables are empty
-  (`.env:13-15`). No substitute model was used.
+  (`.env:13-15`). No substitute model was used. Official DeepSeek pricing was
+  read on 2026-11-21, but payment availability from Bangladesh, the actual
+  billed amount and the thinking-mode decision remain unverified/not chosen.
+- Linux was verified inside the `api` container, not on a separate bare-metal
+  Linux host. Windows was verified on the host.
+- The local Docker config had a stale `credsStore: "desktop"`; removing it was
+  a machine-level fix outside the repo. No credential file is tracked.
 - `scripts/dump_db.py` and `scripts/restore_db.py` were added but not executed;
   the existing database volume was reused. Restore is destructive and would
   need a separate confirmation on a real machine.
@@ -274,3 +332,22 @@ Start-Process http://localhost:8000/
 - The single-v2 audit slot is the older `day4_v2_budget20` run because
   `runs/baseline/day5b_v2_budget20_3x` is absent; this caveat is recorded at
   `docs/never_solved_cases.md:11`.
+
+## 10. Follow-up isolation fix after the Linux review
+
+Changed only the non-frozen runtime, tests and docs:
+
+- `core/subprocess_runtime.py`: replaced the parent `os.environ` swap and its
+  lock with `subprocess.Popen(..., env=scrubbed, cwd=<fresh temp>, close_fds=True)`.
+  Communication now uses an authenticated loopback `multiprocessing.connection`
+  Listener/Client; timeout-kill, truncation, fresh-child-after-timeout and the
+  public proxy surface are unchanged.
+- `tests/test_subprocess_runtime.py`: added the real `/proc/self/environ` check
+  and a concurrent-start test asserting the parent environment is unchanged.
+- `docs/FINAL_REPORT.md` and `README.md`: corrected the OS-specific wording,
+  added the host/container pytest outputs, fixed the v4 #18/#20 sentence and
+  recorded the one-case #15 multi-arm signal.
+
+Verification in this session: Windows host `238 passed, 1 skipped`; Linux
+`api` container subprocess file `13 passed`. No frozen evaluation file was
+edited.

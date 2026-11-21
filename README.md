@@ -1422,10 +1422,12 @@ wrong→right 25, right→wrong 2, right→right 14, wrong→wrong 19, with pre-
 16/60 and final 39/60.
 
 The pre-registered v4 changes did **not** produce a significant multi-arm gain.
-The two arms share the same failures on cases 18 and 20 in all repeats; the
-multi run still wasted budget on malformed weather joins (for example querying
-`no2_ugm3` from `paired_hourly_weather`, which only exposes AQ identifiers and
-meteorology). The offline comparison artifact is
+The earlier claim that cases 18 and 20 failed in all repeats was wrong:
+`docs/never_solved_cases.md:64-69` records #18's single pass in multi v2 and #20's
+single pass in single v4 (`1/3` in that arm); #14 also passed once in multi v4
+and #15 five times. The multi run still wasted budget on malformed weather joins
+(for example querying `no2_ugm3` from `paired_hourly_weather`, which only exposes
+AQ identifiers and meteorology). The offline comparison artifact is
 `runs/multi/day9_v4_budget20_3x/compare.json` (gitignored).
 
 ### v4 agent-to-reference replication

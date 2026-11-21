@@ -96,14 +96,60 @@ def test_timeout_kills_the_child_and_a_later_execute_works():
         instance.close()
 
 
+FORBIDDEN_ENV = (
+    "DB_URL_ADMIN",
+    "POSTGRES_PASSWORD",
+    "NEURO_ADMIN_ENV",
+    "LLM_MODEL",
+    "LLM_BASE_URL",
+    "LLM_API_KEY",
+    "LLM_MODEL_STRONG",
+    "LLM_BASE_URL_STRONG",
+    "LLM_API_KEY_STRONG",
+    "EMBED_MODEL",
+    "EMBED_API_KEY",
+)
+
+
+def _plant_parent_secrets(monkeypatch):
+    for key in FORBIDDEN_ENV:
+        monkeypatch.setenv(key, "secret")
+
+
 def test_child_environment_does_not_inherit_admin_or_llm_keys(monkeypatch, runtime):
-    monkeypatch.setenv("DB_URL_ADMIN", "postgresql://admin:secret@db/airdb")
-    monkeypatch.setenv("LLM_API_KEY_STRONG", "strong-secret")
-    keys = runtime._rpc({"op": "env_keys"})["result"]
+    _plant_parent_secrets(monkeypatch)
+    keys = set(runtime._rpc({"op": "env_keys"})["result"])
     assert "DB_URL_RO" in keys
-    assert "DB_URL_ADMIN" not in keys
-    assert "POSTGRES_PASSWORD" not in keys
-    assert "LLM_API_KEY_STRONG" not in keys
+    assert not {key for key in keys if key.startswith("POSTGRES_")}
+    assert not {key for key in keys if key.startswith("LLM_")}
+    assert not {key for key in keys if key.startswith("EMBED_")}
+    assert not (keys & set(FORBIDDEN_ENV))
+
+
+def test_child_proc_environ_has_no_secret_keys_on_linux(monkeypatch, runtime):
+    _plant_parent_secrets(monkeypatch)
+    keys = runtime._rpc({"op": "proc_environ_keys"})["result"]
+    if keys is None:
+        pytest.skip("not Linux")
+    keys = set(keys)
+    assert not {key for key in keys if key.startswith("POSTGRES_")}
+    assert not {key for key in keys if key.startswith("LLM_")}
+    assert not {key for key in keys if key.startswith("EMBED_")}
+    assert not (keys & set(FORBIDDEN_ENV))
+
+
+def test_starting_a_child_does_not_mutate_parent_environ(monkeypatch):
+    _plant_parent_secrets(monkeypatch)
+    before = dict(os.environ)
+    instance = SubprocessRuntime(execute_timeout=5.0)
+    try:
+        thread = threading.Thread(target=instance._ensure_child)
+        thread.start()
+        thread.join(timeout=30)
+        assert not thread.is_alive()
+        assert dict(os.environ) == before
+    finally:
+        instance.close()
 
 
 def test_child_cwd_is_a_fresh_empty_temp_dir(runtime):
