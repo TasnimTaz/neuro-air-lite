@@ -85,14 +85,11 @@
         activeSec.style.display = "block";
       }
 
-      const titleMap = { query: "Dashboard", trace: "Execution Trace", charts: "Visualizations", reference: "Reference Baseline" };
+      const titleMap = { query: "Dashboard", trace: "Execution Trace", charts: "Visualizations" };
       if (bcCurrent) bcCurrent.textContent = titleMap[targetPanel] || "Workspace";
 
       if (targetPanel === "charts" || targetPanel === "query") {
         setTimeout(() => chartInstances.forEach(c => c.resize()), 80);
-      }
-      if (targetPanel === "reference") {
-        setTimeout(() => referenceChartInstances.forEach(c => c.resize()), 80);
       }
     });
   });
@@ -664,7 +661,7 @@
   }
 
   async function loadReference() {
-    if (!referenceBody) return;
+    if (!referenceBody || referenceBody.closest("template")) return;
     try {
       const response = await fetch("/api/reference/tai_po");
       if (!response.ok) throw new Error("HTTP " + response.status);

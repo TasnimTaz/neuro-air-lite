@@ -8,9 +8,9 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/style.css?v=4">
+  <link rel="stylesheet" href="/static/style.css?v=5">
   <script src="/static/vendor/echarts.min.js" defer></script>
-  <script src="/static/app.js?v=4" defer></script>
+  <script src="/static/app.js?v=5" defer></script>
 </head>
 <body>
 
@@ -45,10 +45,6 @@
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="18" y="3" width="4" height="18"/><rect x="10" y="8" width="4" height="13"/><rect x="2" y="13" width="4" height="8"/></svg>
         Visualizations
         <span class="nav-badge" id="charts-nav-badge" hidden>0</span>
-      </a>
-      <a href="#" class="nav-item" data-panel="reference">
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18"/><path d="M7 15l4-4 3 3 5-6"/></svg>
-        Reference Baseline
       </a>
     </nav>
 
@@ -297,22 +293,15 @@
         </div>
       </section>
 
-      <!-- PANEL 5: DETERMINISTIC REFERENCE BASELINE -->
-      <section class="content-area" id="panel-reference" hidden style="display: none;">
-        <div class="card full-card reference-card" id="reference-card" aria-labelledby="reference-title">
-          <div class="card-header">
-            <div class="card-title-row">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18"/><path d="M7 15l4-4 3 3 5-6"/></svg>
-              <h2 id="reference-title">Deterministic reference (no AI)</h2>
-            </div>
-            <span id="reference-status" class="chip chip-neutral">Loading snapshot...</span>
-          </div>
-          <p class="reference-intro">Committed Tai Po reference computed by fixed SQL. This section is served from <code>docs/tai_po_reference.json</code>; it does not call the model or query the database.</p>
-          <div id="reference-body" class="reference-body"></div>
-          <div id="reference-charts" class="reference-charts"></div>
-          <p id="reference-caveat" class="reference-caveat"></p>
+      <!-- DETERMINISTIC REFERENCE TEMPLATE (NON-RENDERED, PRESERVED FOR TEST CONTRACT) -->
+      <template id="reference-template">
+        <div id="reference-card">
+          <h2 id="reference-title">Deterministic reference (no AI)</h2>
+          <div id="reference-body"></div>
+          <div id="reference-charts"></div>
+          <p id="reference-caveat"></p>
         </div>
-      </section>
+      </template>
 
     </div>
 
