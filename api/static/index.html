@@ -8,9 +8,9 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/style.css?v=3">
+  <link rel="stylesheet" href="/static/style.css?v=4">
   <script src="/static/vendor/echarts.min.js" defer></script>
-  <script src="/static/app.js?v=3" defer></script>
+  <script src="/static/app.js?v=4" defer></script>
 </head>
 <body>
 
@@ -263,7 +263,7 @@
       </div>
 
       <!-- PANEL 3: EXECUTION TRACE -->
-      <section class="content-area" id="panel-trace" hidden>
+      <section class="content-area" id="panel-trace" hidden style="display: none;">
         <div class="card full-card">
           <div class="card-header">
             <div class="card-title-row">
@@ -281,7 +281,7 @@
       </section>
 
       <!-- PANEL 4: CHARTS -->
-      <section class="content-area" id="panel-charts" hidden>
+      <section class="content-area" id="panel-charts" hidden style="display: none;">
         <div class="card full-card">
           <div class="card-header">
             <div class="card-title-row">
@@ -298,7 +298,7 @@
       </section>
 
       <!-- PANEL 5: DETERMINISTIC REFERENCE BASELINE -->
-      <section class="content-area" id="panel-reference" hidden>
+      <section class="content-area" id="panel-reference" hidden style="display: none;">
         <div class="card full-card reference-card" id="reference-card" aria-labelledby="reference-title">
           <div class="card-header">
             <div class="card-title-row">

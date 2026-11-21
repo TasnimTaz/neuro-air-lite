@@ -197,6 +197,7 @@ body {
 .view-stage { position: relative; flex: 1; }
 
 .content-area { padding: 2rem 2.5rem; }
+.content-area[hidden] { display: none !important; }
 
 .split-layout {
   display: grid;

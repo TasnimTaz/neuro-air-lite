@@ -75,9 +75,15 @@
       document.querySelectorAll(".sidebar-nav .nav-item").forEach(item => item.classList.remove("active"));
       link.classList.add("active");
 
-      document.querySelectorAll(".content-area").forEach(sec => sec.hidden = true);
+      document.querySelectorAll(".content-area").forEach(sec => {
+        sec.hidden = true;
+        sec.style.display = "none";
+      });
       const activeSec = document.getElementById(`panel-${targetPanel}`);
-      if (activeSec) activeSec.hidden = false;
+      if (activeSec) {
+        activeSec.hidden = false;
+        activeSec.style.display = "block";
+      }
 
       const titleMap = { query: "Dashboard", trace: "Execution Trace", charts: "Visualizations", reference: "Reference Baseline" };
       if (bcCurrent) bcCurrent.textContent = titleMap[targetPanel] || "Workspace";
