@@ -79,11 +79,14 @@
       const activeSec = document.getElementById(`panel-${targetPanel}`);
       if (activeSec) activeSec.hidden = false;
 
-      const titleMap = { query: "Dashboard", trace: "Execution Trace", charts: "Visualizations" };
+      const titleMap = { query: "Dashboard", trace: "Execution Trace", charts: "Visualizations", reference: "Reference Baseline" };
       if (bcCurrent) bcCurrent.textContent = titleMap[targetPanel] || "Workspace";
 
       if (targetPanel === "charts" || targetPanel === "query") {
         setTimeout(() => chartInstances.forEach(c => c.resize()), 80);
+      }
+      if (targetPanel === "reference") {
+        setTimeout(() => referenceChartInstances.forEach(c => c.resize()), 80);
       }
     });
   });
@@ -621,7 +624,12 @@
         "The peak-to-mean ratio is a screening signal, not causal attribution.";
     }
     if (referenceStatus) {
-      referenceStatus.textContent = payload.ok ? "Reference 21/21 checks" : "Reference degraded";
+      if (Array.isArray(payload.checks)) {
+        const passed = payload.checks.filter(c => c.ok).length;
+        referenceStatus.textContent = `Reference ${passed}/${payload.checks.length} checks`;
+      } else {
+        referenceStatus.textContent = payload.ok ? "Reference checks passed" : "Reference degraded";
+      }
       referenceStatus.className = "chip " + (payload.ok ? "chip-success" : "chip-neutral");
     }
   }
