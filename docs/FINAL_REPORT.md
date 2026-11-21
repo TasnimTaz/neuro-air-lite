@@ -259,6 +259,34 @@ The admin env file is excluded from the image by `.dockerignore`; the container
 gets `DB_URL_RO` through `DB_URL_RO_DOCKER` and `LLM_BASE_URL` defaults to
 `http://host.docker.internal:11434/v1` (`docker-compose.yml`).
 
+### 6.1 Live Ollama response through the frontend endpoint
+
+The Ollama desktop app process was running but its API server was not listening.
+Starting `ollama serve` on the host with `OLLAMA_HOST=0.0.0.0:11434` fixed that;
+this is a host environment action, not a repo change. From the rebuilt `api`
+container, `GET http://host.docker.internal:11434/api/tags` then returned
+`200`, and a read-only DB query returned `db_station_count=18`.
+
+A real chat request was then sent to the endpoint the browser UI uses:
+
+```powershell
+curl.exe -N -sS -X POST http://localhost:8000/api/chat `
+  -H "Content-Type: application/json" `
+  --data-binary "@$env:TEMP\frontend_chat_request.json"
+```
+
+with body
+`{"query":"How high above sea level is the Tseung Kwan O air quality station?","arm":"single"}`.
+The final SSE event was:
+
+```json
+{"arm":"single","answer":20.0,"final_text":"The Tseung Kwan O air quality station is 20.0 meters above sea level.","charts":[],"ok":true,"seconds":15.337,"usage":{"prompt_tokens":6620,"completion_tokens":103,"calls":2},"steps":2,"executions":1,"first_attempt_ok":true}
+```
+
+This confirms the UI's SSE path, the subprocess runtime, the read-only DB role
+and a real local LLM answer work together end to end. It is still one query, not
+a full benchmark rerun, and no browser screenshot was captured.
+
 ## 7. Honest conclusion
 
 The multi-agent gain was **not** reproduced with `qwen2.5-coder:14b`: v4 multi
@@ -323,9 +351,9 @@ Start-Process http://localhost:8000/
   need a separate confirmation on a real machine.
 - Manual browser screenshot: not taken. UI verification was through API and
   static-scan tests (`tests/test_api.py`, `tests/test_ui_static.py`).
-- Live chat from inside the container with a real Ollama answer: not exercised.
-  Container health and `/api/health` were verified; the fake-LLM API tests cover
-  request wiring and the timeout path locally.
+- Live chat from inside the container with a real Ollama answer: **verified**
+  in section 6.1 for one query. A browser screenshot and a full 20-question live
+  UI run were not captured.
 - Optional psutil RSS watchdog: code present, but psutil is not installed here.
 - No traffic/emission data, no lag-correlation case study, no expert panel, and
   only one small local model. These are project gaps, not hidden results.
