@@ -1,0 +1,276 @@
+# Final report — Neuro-Air Lite, Day 10
+
+Date: 2026-11-21. Scope: v4 evaluation is frozen. Day 10 adds only the
+read-only audit, an alternative subprocess runtime for the API, packaging, and
+this write-up. No question, truth value, tolerance, scorer, role, eval script or
+in-process evaluation runtime was edited in this session.
+
+## 1. One page in plain language
+
+We built a small Hong Kong air-quality analyst. It reads a read-only copy of a
+Postgres/PostGIS database, lets a language model write Python to answer
+questions, and shows the numbers and charts in a browser. The database holds
+2025 station readings, weather, and map features. A separate, fixed file holds a
+deterministic Tai Po reference answer that the browser can show without any AI
+or database call.
+
+The paper's multi-agent idea was that several specialist agents plus a verifier
+would beat one agent. We tested that with one local 14-billion-parameter model,
+20 questions, three repeats, and matched step budgets. It did not win. In v4 the
+single agent got 47 of 60 runs right; the multi-agent version got 39. The
+difference is not statistically significant. The verifier often repaired a
+wrong answer, but it also broke two right answers. Cost was higher for multi.
+
+The Tai Po reference values were reproduced from the local data (for example
+NO2 123.2 at 20:00, z 1.91, 14-day maximum 125.5, PM2.5 rise 19.56, rank 1, and
+`supports_local_plume=false`). The live agent did not match that reference at
+all: 0 of 24 fields in v4. That is an agent-contract failure, not a reference
+failure.
+
+We checked the cases that almost never passed. There were no cases with zero
+passes in every run: #14, #18 and #20 each passed once in 18 slots, and #15
+passed five times. The suspected benchmark defects were not confirmed; those
+failures were mostly SQL mistakes by the model, such as using NULL-first
+ordering or the wrong join key.
+
+For runtime safety, the API now runs model code in a child process with a
+scrubbed environment and a fresh empty working directory. A timeout kills that
+child. This is better than the old in-process execution, but it is not a
+container: the child is the same OS user and can still reach the network.
+
+Strong-model evaluation was not run. The three `*_STRONG` variables in `.env`
+are empty, and no substitute model was used.
+
+## 2. Component status
+
+| Paper / project component | Status | Evidence in this session |
+| --- | --- | --- |
+| PostGIS schema and read-only role | Done | `README.md:125-144`; live read-only INSERT with `25006` lifted fails with `42501` in `tests/test_subprocess_runtime.py:166` |
+| 20-question frozen benchmark and scorer v2 | Done / frozen | `evals/hk_baseline_v2.py` SHA256 `8751bf7c...` from `Get-FileHash` output; no eval file modified |
+| Single agent with schema prompt | Done | Base prompt hash `ff04f301a5eebdc041b8e0e58260ab5cd4011729463f94c785e2201dacea585f` at `README.md:1374` |
+| Multi-agent coordinator, verifier | Done, no gain reproduced | v4 results and audit at `README.md:1411-1422` |
+| Relevance gate / premise traps | Done, weak | Held-out 74.3% advisory at `README.md:1389`; strict trap score **1/10** at `docs/premise_trap_transcripts.md:7` |
+| Tai Po deterministic reference | Done, reproduced | `docs/tai_po_reference.json:32,38,60-64,120`; endpoint tests `tests/test_api.py:361-374` |
+| Live agent reproduces the 8-field reference | Missing | `runs/reference_compare/day9_v4_single_3x/run.json` aggregate: `field_matches=0/24`, `answer_dict_repeats=0`, `line_chart_passes=0`, `bar_chart_passes=0`; `README.md:1439` |
+| Paired weather view / v4 prompt affordance | Done | `scripts/migrate_views.py`, `tests/test_paired_view.py`; v4 hashes at `README.md:1374-1376` |
+| OS-level subprocess isolation for API | Done, limited | `core/subprocess_runtime.py:38,44,71,313,416`; tests at `tests/test_subprocess_runtime.py:51-186` and `tests/test_api.py:410` |
+| Docker packaging | Done; build and stack health verified | `Dockerfile`, `docker-compose.yml`; `docker_build_exit=0`, both services `healthy`, `/api/health` JSON in §6 |
+| Strong model on a stronger LLM | Missing / blocked | `.env:13` `LLM_MODEL_STRONG=`, `.env:14` `LLM_BASE_URL_STRONG=`, `.env:15` `LLM_API_KEY_STRONG=` |
+| Traffic and emission data case study | Missing | No traffic/emission table is present in the 14-table list at `README.md:125-129` |
+| Lag-correlation case study | Missing | Only the single correlation case #14 exists (`docs/never_solved_cases.md:77-142`); it passed 1/18 slots |
+| Expert panel / human evaluation | Missing | No expert panel artifact exists in this repository; this report does not claim one |
+
+## 3. Results
+
+### 3.1 Frozen hashes
+
+Recorded at `README.md:1374-1376` and used unchanged for the v4 reruns:
+
+| Item | SHA256 |
+| --- | --- |
+| Base prompt with live data window | `ff04f301a5eebdc041b8e0e58260ab5cd4011729463f94c785e2201dacea585f` |
+| Multi prompts snapshot | `141925a0538b2e039cb0d4ac78589ff0ddd3a99e3e5a27b5cd322976289c23a1` |
+| Merged single-role addendum | `2c0a50e48797d11f7b2b8d416447681eb643e482ac39cc6a0117297c941e641d` |
+
+### 3.2 v2 / v3 / v4, both arms
+
+Parsed directly from the six `run.json` files in this session:
+
+| Run | Total | Hold-out | Non-hold-out |
+| --- | ---: | ---: | ---: |
+| v2 single (`runs/baseline/day4_v2_budget20`) | 46/60 | 12/18 | 34/42 |
+| v2 multi (`runs/multi/day5b_v2_budget20_3x`) | 41/60 | 11/18 | 30/42 |
+| v3 single | 45/60 | 11/18 | 34/42 |
+| v3 multi | 40/60 | 8/18 | 32/42 |
+| v4 single | 47/60 | 12/18 | 35/42 |
+| v4 multi | 39/60 | 10/18 | 29/42 |
+
+The v4 single arm used merged roles; the multi arm used overwrite verifier mode,
+scorer v2, 3 repeats, a 20-step solver budget and `--resume` (`README.md:1405-1409`).
+The paired task-level test gave multi 3 wins, 7 losses, 10 ties, exact McNemar
+`p=0.3438`, bootstrap mean difference `-0.133` with 95% CI `[-0.300,+0.033]`
+(`README.md:1416-1419`). Multi cost 2.23x tokens, 2.34x seconds and 3.85x
+calls per case (`README.md:1419-1420`). The verifier audit was wrong→right 25,
+right→wrong 2, with pre-verify 16/60 and final 39/60 (`README.md:1420-1422`).
+
+### 3.3 Tai Po reference and agent comparison
+
+The deterministic reference reports `ok=true` and these paper-target values:
+`no2_at_2000=123.2`, `wind_speed_2000=0.389`, `matched_hour_z=1.9106`,
+`matched_hour_max_prev_14d=125.5`, `network_mean_rise=19.5641`,
+`pm25_rank_of_nearest=1`, `supports_local_plume="false"`
+(`docs/tai_po_reference.json:4,32,38,60-64,120`).
+
+The v4 single-arm rerun finished 3/3 with `reference_ok=True`, but
+`field_matches=0/24`, `answer_dict_repeats=0`, `line_chart_passes=0`,
+`bar_chart_passes=0`. All eight fields were `0/3`
+(`runs/reference_compare/day9_v4_single_3x/run.json`; `README.md:1439-1453`).
+The agent never emitted the exact eight-field `ANSWER` dictionary or the two
+chart configs. This is a real failure of the 14-billion-parameter local model
+on that contract.
+
+### 3.4 Never-solved case audit
+
+`docs/never_solved_cases.md:55-69` reports **no** all-zero cases. Each of #14,
+#18 and #20 passed exactly once in 18 slots; #15 passed five times. The four
+suspected cases were judged (a) single defensible reading with the truth SQL
+implementing it, not an unstated benchmark convention
+(`docs/never_solved_cases.md:133-142,194-199,255-261,320-332`). Specific model
+errors: wrong station and direct `station_id` join for #14, any-hour counting
+instead of daily-mean counting for #15, PostgreSQL `DESC` placing NULLs first
+for #18, and `AVG(roadside - general)` instead of the difference of group means
+for #20. Some recorded passes came from a staged numeric `ANSWER` whose
+`final_text` was the identical-code stop sentinel or even contradicted the
+answer (`docs/never_solved_cases.md:339-343`).
+
+## 4. Isolation: what it covers and what it does not
+
+`RUNTIME_MODE=subprocess` is the API default (`api/app.py:55,496-500`). The
+child is started with Windows spawn, receives a builder reference, creates its
+own engine from `DB_URL_RO`, captures its own stdout, and replies over a Pipe
+(`core/subprocess_runtime.py:71,313,416`). The parent runs `check_code()` before
+sending anything. The child environment allowlist is `OS_ENV_KEYS` plus
+`DB_URL_RO` (`core/subprocess_runtime.py:44`); the cwd is a fresh temp dir;
+output is truncated at 20,000 characters (`core/subprocess_runtime.py:38`);
+timeout kills the child and the next execute starts fresh.
+
+Verified tests:
+
+- State, manifest, namespace proxy, engine URL proxy:
+  `tests/test_subprocess_runtime.py:51,58,66,80`.
+- Timeout kills child and later execute works: `:84`.
+- No `DB_URL_ADMIN` / `LLM_API_KEY_STRONG` in child; no `.env` in cwd: `:99,109`.
+- AST checker rejects before any RPC: `:115`.
+- Two children do not mix stdout; large output truncated: `:133,159`.
+- Live read-only role can SELECT, cannot INSERT after `25006` is lifted: `:166`.
+- Infinite loop does not hang the API and does not poison it:
+  `tests/test_api.py:410`.
+- Concurrency limit 2 replaces single-flight in subprocess mode:
+  `tests/test_api.py:238,258`; `api/app.py:115,522`.
+
+Not covered: the child is the same OS user, keeps network access to Postgres and
+to the geocoder, and has no container/cgroup sandbox. The AST checker is a guard
+rail; the `neuro_ro` grant is the real data boundary. An absolute-path read of
+the admin file by deliberately hostile code is not prevented by the environment
+scrub. Memory capping is implemented only when `psutil` is installed; `psutil`
+was absent in this session (`importlib.util.find_spec('psutil')` returned
+`False`), so that branch was not exercised. The in-process evaluator still uses
+the unchanged `core/runtime.py`; its poison guard is kept for
+`RUNTIME_MODE=inproc`.
+
+## 5. Test output
+
+Command: `uv run pytest -q`, with the database running.
+
+```
+........................................................................ [ 30%]
+........................................................................ [ 60%]
+........................................................................ [ 91%]
+.....................                                                    [100%]
+237 passed in 23.69s
+```
+
+Earlier in the session, with the database stopped, the same suite reported
+`230 passed, 7 skipped in 35.43s`; the seven skips were DB-live tests. No test
+was edited to hide a failure.
+
+## 6. Docker build and stack verification
+
+`docker compose build api` first failed with
+`error getting credentials - err: exec: "docker-credential-desktop": executable
+file not found in %PATH%`. The local `~/.docker/config.json` had a stale
+`credsStore: "desktop"`; after removing it, the unchanged repo build succeeded.
+Final command output:
+
+```
+docker_build_exit=0
+ Image neuroair-api:day10 Built
+```
+
+Then `docker compose up -d` was run with both `.env` and the admin env file.
+After a first restart caused by a root-owned uv cache, the Dockerfile was fixed
+to chown `/home/neuroair`; the rebuilt stack reported:
+
+```
+NAME           IMAGE                    STATUS                    PORTS
+neuroair-api   neuroair-api:day10       Up 12 seconds (healthy)   0.0.0.0:8000->8000/tcp
+neuroair-db    postgis/postgis:16-3.4   Up 6 minutes (healthy)    0.0.0.0:5432->5432/tcp
+```
+
+`GET http://localhost:8000/api/health` returned:
+
+```json
+{"status":"ok","degraded":false,"busy":false,"runtime_mode":"subprocess","max_concurrent_runs":2,"active_runs":0,"arm_default":"single","arms":["single","multi"],"model":"qwen2.5-coder:14b","timeout_seconds":600.0}
+```
+
+The admin env file is excluded from the image by `.dockerignore`; the container
+gets `DB_URL_RO` through `DB_URL_RO_DOCKER` and `LLM_BASE_URL` defaults to
+`http://host.docker.internal:11434/v1` (`docker-compose.yml`).
+
+## 7. Honest conclusion
+
+The multi-agent gain was **not** reproduced with `qwen2.5-coder:14b`: v4 multi
+scored 39/60 against single 47/60 and the paired test gave `p=0.3438`. This
+shows that this particular local model, prompt set and 20-task benchmark did not
+benefit from the coordinator/verifier structure. It does not prove that
+multi-agent systems can never help, and it does not test a stronger model.
+
+The v4 paired weather view fixed a real query-construction defect, but it did
+not make the multi arm win and did not fix the agent-to-reference contract. The
+never-solved audit did not find evidence that the benchmark answers are wrong;
+most failures are model-generated SQL mistakes. Two suspicious details remain
+honestly recorded: some scorer passes coexist with contradictory prose, and
+case #18 has no deterministic tie-break in its truth SQL.
+
+A strong-model run would test whether the same tasks and contracts improve when
+the model is large enough to hold the eight-field `ANSWER` schema and the
+weather-pairing rules. It would not fix the missing traffic/emission data or
+substitute for an expert panel.
+
+## 8. Reproduction
+
+```powershell
+uv sync --frozen
+uv run pytest -q                       # 237 passed with DB up; skips if DB down
+uv run python scripts/migrate_views.py # idempotent; no --reset
+docker compose --env-file .env --env-file "$HOME\.neuro-air\admin.env" build api
+```
+
+Five-step demo:
+
+```powershell
+# 1. Start the stack (set DB_URL_RO_DOCKER in .env with host "db" first).
+$env:DB_URL_RO_DOCKER = uv run python -c "from dotenv import dotenv_values; u=dotenv_values('.env')['DB_URL_RO']; print(u.replace('127.0.0.1','db',1).replace('localhost','db',1))"
+docker compose --env-file .env --env-file "$HOME\.neuro-air\admin.env" up -d --build
+
+# 2. Check the API and runtime mode.
+Invoke-RestMethod http://localhost:8000/api/health | ConvertTo-Json
+
+# 3. Show the deterministic reference (no LLM, no DB).
+Invoke-RestMethod http://localhost:8000/api/reference/tai_po | Select-Object ok,observed,anomaly_assessment
+
+# 4. Ask one live question through the UI's SSE endpoint.
+curl.exe -N -X POST http://localhost:8000/api/chat -H "Content-Type: application/json" -d '{"query":"What was the PM2.5 reading at Tai Po at noon on 7 January 2025?","arm":"single"}'
+
+# 5. Open the browser UI and the deterministic-reference section.
+Start-Process http://localhost:8000/
+```
+
+## 9. Unverified items and gaps
+
+- Strong-model evaluation: not run; all three `*_STRONG` variables are empty
+  (`.env:13-15`). No substitute model was used.
+- `scripts/dump_db.py` and `scripts/restore_db.py` were added but not executed;
+  the existing database volume was reused. Restore is destructive and would
+  need a separate confirmation on a real machine.
+- Manual browser screenshot: not taken. UI verification was through API and
+  static-scan tests (`tests/test_api.py`, `tests/test_ui_static.py`).
+- Live chat from inside the container with a real Ollama answer: not exercised.
+  Container health and `/api/health` were verified; the fake-LLM API tests cover
+  request wiring and the timeout path locally.
+- Optional psutil RSS watchdog: code present, but psutil is not installed here.
+- No traffic/emission data, no lag-correlation case study, no expert panel, and
+  only one small local model. These are project gaps, not hidden results.
+- The single-v2 audit slot is the older `day4_v2_budget20` run because
+  `runs/baseline/day5b_v2_budget20_3x` is absent; this caveat is recorded at
+  `docs/never_solved_cases.md:11`.

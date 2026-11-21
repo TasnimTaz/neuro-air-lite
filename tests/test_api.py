@@ -17,8 +17,10 @@ import time
 import pytest
 from fastapi.testclient import TestClient
 
+import api.app as app_module
 from api.app import BusyGate, build_reference_payload, create_app
 from core.runtime import PythonRuntime
+from core.subprocess_runtime import SubprocessRuntime
 from domains.hk.viz import EChartsConfigManager
 
 
@@ -233,19 +235,39 @@ def test_query_alias_and_validation():
     assert bad_arm.status_code == 422
 
 
-def test_busy_gate_returns_429_immediately():
+def test_busy_gate_returns_429_when_the_limit_is_full():
     app, client = _client(ScriptedLLM(SINGLE_RESPONSES))
-    lease = app.state.gate.try_acquire()
-    assert lease is not None
+    leases = []
+    for _ in range(app.state.gate._limit):
+        lease = app.state.gate.try_acquire()
+        assert lease is not None
+        leases.append(lease)
+    assert app.state.gate.busy is True
     try:
         response = client.post("/api/chat", json={"query": "demo"})
     finally:
-        lease.release()
+        for lease in leases:
+            lease.release()
 
     assert response.status_code == 429
     assert response.headers["retry-after"] == "2"
-    assert "already running" in response.json()["detail"]
+    assert "Too many concurrent" in response.json()["detail"]
     assert app.state.gate.busy is False
+
+
+def test_subprocess_mode_allows_two_concurrent_runs_by_default():
+    app, _ = _client(ScriptedLLM([]))
+    first = app.state.gate.try_acquire()
+    second = app.state.gate.try_acquire()
+    third = app.state.gate.try_acquire()
+    assert first is not None
+    assert second is not None
+    assert third is None
+    first.release()
+    replacement = app.state.gate.try_acquire()
+    assert replacement is not None
+    replacement.release()
+    second.release()
 
 
 def test_busy_gate_is_idempotent():
@@ -275,7 +297,8 @@ def test_timeout_emits_an_error_instead_of_hanging():
     assert done["ok"] is False
 
 
-def test_timeout_poisons_app_while_runtime_thread_is_still_executing():
+def test_timeout_poisons_app_while_runtime_thread_is_still_executing(monkeypatch):
+    monkeypatch.setattr(app_module, "RUNTIME_MODE", "inproc")
     release = threading.Event()
     app, client = _client(
         ScriptedLLM(SINGLE_RESPONSES),
@@ -356,6 +379,9 @@ def test_static_ui_and_health_are_served():
     assert health.json()["degraded"] is False
     assert health.json()["arm_default"] == "single"
     assert health.json()["busy"] is False
+    assert health.json()["runtime_mode"] == app_module.RUNTIME_MODE
+    assert health.json()["max_concurrent_runs"] == 2
+    assert health.json()["active_runs"] == 0
 
 
 def test_reference_endpoint_serves_snapshot_and_chart_configs_without_a_model():
@@ -379,3 +405,35 @@ def test_reference_payload_is_file_only():
     assert payload["ok"] is True
     assert payload["charts"]
     assert "no LLM" not in json.dumps(payload["charts"])  # configs only, no prompt text
+
+
+def test_infinite_loop_is_killed_and_the_api_stays_usable(monkeypatch):
+    # The subprocess runtime has a real read-only engine; keep this test DB-less.
+    monkeypatch.setattr(app_module, "get_system_prompt", lambda engine=None: "system")
+    llm = ScriptedLLM(
+        [
+            "```python\nwhile True: pass\n```",
+            "The loop was stopped.",
+            "```python\nANSWER = 99\n```",
+            "Recovered answer is 99.",
+        ]
+    )
+    app, client = _client(
+        llm,
+        runtime_factory=lambda: SubprocessRuntime(execute_timeout=0.5),
+        timeout_seconds=10.0,
+        heartbeat_seconds=0.01,
+    )
+    response = client.post("/api/chat", json={"query": "infinite loop"})
+    assert response.status_code == 200
+    events = _events(response.text)
+    outputs = [data for name, data in events if name == "output"]
+    assert any("TimeoutError" in str(data) for data in outputs)
+    assert client.get("/api/health").json()["degraded"] is False
+
+    second = client.post("/api/chat", json={"query": "after timeout"})
+    assert second.status_code == 200
+    second_events = _events(second.text)
+    second_final = next(data for name, data in second_events if name == "final")
+    assert second_final["answer"] == 99
+    assert next(data for name, data in second_events if name == "done")["ok"] is True

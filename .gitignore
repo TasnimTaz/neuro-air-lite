@@ -17,6 +17,7 @@ __pycache__/
 /runs/
 /charts/
 /ingest/cache/
+/backups/
 *.log
 
 # --- os / editors ---

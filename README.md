@@ -1458,6 +1458,75 @@ two chart configs. This is a real single-arm failure on the multi-field
 contract, not a reference failure. Artifact:
 `runs/reference_compare/day9_v4_single_3x/run.json` (gitignored).
 
+## Day 10: isolated runtime (honest scope)
+
+The API now defaults to `RUNTIME_MODE=subprocess`; the evaluation harness still
+uses the unchanged in-process `PythonRuntime`. `core/subprocess_runtime.py`
+starts a Windows spawn child, checks the AST in the parent, sends code over a
+Pipe, captures stdout in the child, and exposes a small namespace proxy
+(`get`, `[]`, `in`, assignment, `pop`) plus an engine proxy used only to build the
+system prompt. A wall-clock timeout kills the child and the next execute starts
+a fresh one, so staged state is deliberately lost. Memory capping is optional
+via `psutil`; no `resource.setrlimit` is used on Windows.
+
+The child receives only `DB_URL_RO` plus the minimum OS variables; a fresh empty
+temp directory is its cwd, so a relative `.env` read finds nothing. Tests prove
+that a parent `DB_URL_ADMIN` and `LLM_API_KEY_STRONG` are not visible, that two
+children do not mix stdout, that AST rejection happens before any RPC, and that
+a live read-only role can SELECT but cannot INSERT once `25006` is lifted
+(`test_child_can_read_database_and_cannot_insert`).
+
+This is **not** a container sandbox. The child runs as the same OS user, keeps
+network access to Postgres and to the geocoder endpoints, and the AST checker is
+a guard rail rather than a security boundary. The real data boundary is the
+`neuro_ro` grant. The in-process poison guard remains for `RUNTIME_MODE=inproc`;
+subprocess mode uses `MAX_CONCURRENT_RUNS` (default 2) and never poisons the app
+because the timeout kills the child. Verified by
+`test_infinite_loop_is_killed_and_the_api_stays_usable` and 237 passing tests
+with the database running.
+
+## Day 10: Docker and moving the data
+
+`Dockerfile` builds a non-root `python:3.12-slim` image with `uv` and installs
+dependencies from `uv.lock`. The repo `.env` and `~/.neuro-air/admin.env` are
+excluded by `.dockerignore`; neither is baked into the image. `docker-compose.yml`
+adds the `api` service with healthchecks, `extra_hosts: host.docker.internal`,
+and `LLM_BASE_URL` defaulting to `http://host.docker.internal:11434/v1` for a
+host Ollama. The container DSN must be a separate `DB_URL_RO_DOCKER` in `.env`
+with the hostname `db`.
+
+```powershell
+# add to .env: DB_URL_RO_DOCKER=postgresql+psycopg2://neuro_ro:<pw>@db:5432/airdb
+docker compose --env-file .env --env-file "$HOME\.neuro-air\admin.env" up --build -d
+docker compose --env-file .env --env-file "$HOME\.neuro-air\admin.env" ps
+```
+
+On a fresh machine, restore a dump instead of re-ingesting:
+
+```powershell
+uv run python scripts/dump_db.py                       # on the source machine
+uv run python scripts/restore_db.py backups/<file>.dump --yes
+uv run python scripts/migrate_views.py                 # idempotent paired view
+```
+
+The dump/restore scripts read `DB_URL_ADMIN` from `$NEURO_ADMIN_ENV` or
+`~/.neuro-air/admin.env`; they never write credentials into the repo. Restore
+is destructive and was not run in this session. The image build was run and
+succeeded (`docker_build_exit=0`, image `neuroair-api:day10`); both compose
+services reached `healthy`, and `GET /api/health` reported
+`"runtime_mode":"subprocess","max_concurrent_runs":2`.
+
+## Day 10: audit and final report
+
+`docs/never_solved_cases.md` is the read-only audit of all v2/v3/v4 runs. There
+were **no** all-zero cases; #14, #18 and #20 each passed exactly once in 18
+slots, and #15 passed 5 times. The four suspected cases are analysed there with
+question, truth SQL, truth value, a representative failure and the judgement
+that the truth SQL implements the single defensible reading.
+
+`docs/FINAL_REPORT.md` is the plain-language final write-up, including what was
+not reproduced, the strong-model gap and the exact unverified items.
+
 ## Conventions
 
 - The agent only ever connects with the read-only `neuro_ro` role. Ingestion
@@ -1509,4 +1578,5 @@ contract, not a reference failure. Artifact:
 | 6 | relevance gate, knowledge retrieval, verifier tuning | implemented; live gate calibration theta=0.54, held-out 0.743; live premise traps 1/10 (diagnostic, not a benchmark); strict transcripts in `docs/premise_trap_transcripts.md` |
 | 7 | FastAPI SSE API and ECharts demo UI | implemented; 224 tests pass; timeout-poison 503 guard added; live demo 5/5 HTTP 200: single 4/4 answered, but the multi Tai Po run joined weather on the wrong key, returned no data and the verifier confirmed that wrong answer |
 | 8 | deterministic Tai Po reference, daemon | implemented; reference 21/21 checks, paper targets reproduced, daemon replay 0 triggers; live v3 agent-to-reference 0/24 fields, 0/3 ANSWER dicts, 0/3 charts - single arm failed, reference valid |
-| 9 | v4 paired view, prompt affordance, matched rerun, reference UI | done; paired view migration + regression tests, base hash `ff04f301...`, single 47/60 vs multi 39/60 (McNemar p=0.3438), deterministic `/api/reference/tai_po` and UI section; strong-model evaluation still blocked by unset `*_STRONG` credentials; Day 10 not started |
+| 9 | v4 paired view, prompt affordance, matched rerun, reference UI | done; paired view migration + regression tests, base hash `ff04f301...`, single 47/60 vs multi 39/60 (McNemar p=0.3438), deterministic `/api/reference/tai_po` and UI section; strong-model evaluation still blocked by unset `*_STRONG` credentials |
+| 10 | never-solved audit, subprocess runtime, Docker packaging, final write-up | done; `docs/never_solved_cases.md`, spawn-backed API runtime, `Dockerfile`/compose API service, `docs/FINAL_REPORT.md`; 237 tests pass with the database up; strong-model run still blocked by unset `*_STRONG` credentials |

@@ -38,6 +38,7 @@ from core.env import load_agent_env
 from core.llm import llm, snapshot_usage
 from core.orchestrator import run_pipeline
 from core.runtime import PythonRuntime
+from core.subprocess_runtime import SubprocessRuntime
 from domains.hk.roles import COORDINATOR_SYSTEM, MULTI_RULES, ROLE_PROMPTS
 from domains.hk.schema_prompt import get_system_prompt
 from domains.hk.tools import build_runtime
@@ -51,8 +52,23 @@ REQUEST_TIMEOUT_SECONDS = 600.0
 HEARTBEAT_SECONDS = 15.0
 MAX_QUERY_CHARS = 4000
 MAX_ERROR_CHARS = 500
+RUNTIME_MODE = os.environ.get("RUNTIME_MODE", "subprocess").strip().lower()
 
-RuntimeFactory = Callable[[], PythonRuntime]
+
+def _env_positive_int(name: str, default: int) -> int:
+    raw = os.environ.get(name)
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        return default
+    return value if value > 0 else default
+
+
+MAX_CONCURRENT_RUNS = _env_positive_int("MAX_CONCURRENT_RUNS", 2)
+
+RuntimeFactory = Callable[[], PythonRuntime | SubprocessRuntime]
 LLMFunc = Callable[[list[dict[str, str]]], Awaitable[str]]
 
 
@@ -84,7 +100,7 @@ class ChatRequest(BaseModel):
 
 @dataclass
 class _Lease:
-    """Idempotent ownership token for the single-flight gate."""
+    """Idempotent ownership token for the UI run gate."""
 
     gate: "BusyGate"
     released: bool = False
@@ -93,45 +109,53 @@ class _Lease:
         if self.released:
             return
         self.released = True
-        self.gate._busy = False
+        self.gate._release()
 
 
 class BusyGate:
-    """A synchronous try-acquire gate used by an async route.
+    """Synchronous try-acquire gate used by the async route.
 
-    The route runs on the event-loop thread, so checking and setting ``_busy``
-    without an ``await`` is atomic with respect to other requests.
+    In-process mode keeps the original single-flight behaviour because stdout
+    redirection is process-wide. Subprocess mode uses a concurrency limit: each
+    run owns a child process and a private stdout buffer.
     """
 
-    def __init__(self) -> None:
-        self._busy = False
+    def __init__(self, limit: int = 1) -> None:
+        self._limit = max(1, limit)
+        self._active = 0
 
     @property
     def busy(self) -> bool:
-        return self._busy
+        return self._active >= self._limit
+
+    @property
+    def active(self) -> int:
+        return self._active
 
     def try_acquire(self) -> _Lease | None:
-        if self._busy:
+        if self.busy:
             return None
-        self._busy = True
+        self._active += 1
         return _Lease(self)
+
+    def _release(self) -> None:
+        self._active = max(0, self._active - 1)
 
 
 class RuntimeGuard:
-    """Detect a runtime that outlived its request.
+    """Track runtimes that outlive a request.
 
-    ``asyncio.wait_for`` cancels the asyncio task, but a worker thread blocked
-    in ``PythonRuntime.execute`` keeps running. Because that method redirects
-    process-wide stdout, starting a second run would corrupt both traces. If a
-    timeout or client disconnect leaves execution in flight, the app is marked
-    poisoned and refuses new chat requests until the process is restarted.
+    In-process mode poisons the app on timeout because stdout redirection is
+    process-wide. Subprocess mode never poisons: the child is killed by its own
+    wall-clock timeout and the next request creates a fresh runtime.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, *, mode: str = RUNTIME_MODE) -> None:
+        self.mode = mode
         self.poisoned = False
-        self.runtime: PythonRuntime | None = None
+        self.runtime: PythonRuntime | SubprocessRuntime | None = None
 
-    def attach(self, runtime: PythonRuntime) -> None:
+    def attach(self, runtime: PythonRuntime | SubprocessRuntime) -> None:
         self.runtime = runtime
         original_execute = runtime.execute
         runtime.running = False  # type: ignore[attr-defined]
@@ -146,13 +170,15 @@ class RuntimeGuard:
         runtime.execute = tracked_execute  # type: ignore[method-assign]
 
     def observe(self) -> bool:
-        """Mark the app poisoned if the attached runtime is still executing."""
+        """Mark the app poisoned only when an inproc runtime is still executing."""
+        if self.mode == "subprocess":
+            return False
         if self.runtime is not None and getattr(self.runtime, "running", False):
             self.poisoned = True
         return self.poisoned
 
-    def close_if_idle(self, runtime: PythonRuntime) -> None:
-        if getattr(runtime, "running", False):
+    def close_if_idle(self, runtime: PythonRuntime | SubprocessRuntime) -> None:
+        if self.mode != "subprocess" and getattr(runtime, "running", False):
             self.poisoned = True
             return
         runtime.close()
@@ -467,9 +493,18 @@ def build_reference_payload() -> dict[str, Any]:
     return payload
 
 
+def make_api_runtime() -> PythonRuntime | SubprocessRuntime:
+    """Default runtime for the API; the evaluator keeps ``build_runtime()``."""
+    if RUNTIME_MODE == "subprocess":
+        return SubprocessRuntime()
+    if RUNTIME_MODE == "inproc":
+        return build_runtime()
+    raise RuntimeError(f"unknown RUNTIME_MODE={RUNTIME_MODE!r}; use subprocess or inproc")
+
+
 def create_app(
     *,
-    runtime_factory: RuntimeFactory = build_runtime,
+    runtime_factory: RuntimeFactory = make_api_runtime,
     llm_func: LLMFunc = llm,
     timeout_seconds: float = REQUEST_TIMEOUT_SECONDS,
     heartbeat_seconds: float = HEARTBEAT_SECONDS,
@@ -484,8 +519,9 @@ def create_app(
         description="Hong Kong air-quality analyst: single or multi-agent, SSE streaming.",
         version="0.1.0",
     )
-    app.state.gate = BusyGate()
-    app.state.guard = RuntimeGuard()
+    gate_limit = MAX_CONCURRENT_RUNS if RUNTIME_MODE == "subprocess" else 1
+    app.state.gate = BusyGate(limit=gate_limit)
+    app.state.guard = RuntimeGuard(mode=RUNTIME_MODE)
     app.state.runtime_factory = runtime_factory
     app.state.llm_func = llm_func
     app.state.timeout_seconds = timeout_seconds
@@ -512,6 +548,9 @@ def create_app(
             "status": "degraded" if degraded else "ok",
             "degraded": degraded,
             "busy": app.state.gate.busy,
+            "runtime_mode": RUNTIME_MODE,
+            "max_concurrent_runs": app.state.gate._limit,
+            "active_runs": app.state.gate.active,
             "arm_default": "single",
             "arms": ["single", "multi"],
             "model": os.environ.get("LLM_MODEL"),
@@ -539,7 +578,7 @@ def create_app(
         if lease is None:
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                detail="Another query is already running. Try again when it finishes.",
+                detail="Too many concurrent queries. Try again when one finishes.",
                 headers={"Retry-After": "2"},
             )
         try:
