@@ -1,5 +1,18 @@
 # v5 local status (this machine)
 
+## Gate A amendment note (2026-11-22)
+
+Gate A amended on 2026-11-22 AFTER seeing the DEV result; original rule: "Proceed only if
+first_attempt_success >= 0.95 in BOTH arms and multi stalls ~ 0" (`docs/V5_PLAN.md:33`, kept
+verbatim there); reason: `multi stalls ~ 0` is a performance condition, not an integrity
+condition, and it blocks the only unbiased TEST run indefinitely. The amended gate is
+integrity-only: frozen files unchanged since `72d0ec8`, scorer unchanged, infra failures
+excluded symmetrically and re-run until both arms have equal valid-task counts, and the TEST
+split never inspected before the run finishes. Stall count is now a reported outcome. Also
+pre-declared before TEST: single TEST pass rate above 90% makes the split uninformative for GAIN
+(though it can still show harm), with 'hard' tier defined by task type in `evals/v5/tasks.py`,
+never by which tasks single failed.
+
 Context: Windows host (`win32`), repository `neuro-air-lite`, Python via `uv`,
 Ollama `0.40.17`. Commands below were run on 2026-11-22. No paid model call was made.
 

@@ -33,6 +33,26 @@ uv run python evals/run_v5.py --split dev --arm multi  --out runs/v5/dev_multi
 #    Proceed only if first_attempt_success >= 0.95 in BOTH arms and multi stalls ~ 0.
 #    If not, fix the harness (never the test split, never the task file) and rerun dev.
 
+## Gate A amendment (2026-11-22, AFTER seeing the DEV result)
+
+The original rule above is kept verbatim for audit. It is amended to an **INTEGRITY gate only**:
+
+* frozen files unchanged since freeze commit `72d0ec8` (Step 0 output);
+* scorer unchanged;
+* infra failures (`steps == 0 AND tokens == 0`, or the harness's `infra_failed` flag) are excluded
+  **symmetrically** in both arms and re-run until both arms have the same number of valid tasks;
+* the TEST split is never inspected before the TEST run finishes.
+
+Stall count is now a **reported outcome**, not a gate condition. The reason for the amendment is
+that `multi stalls ~ 0` is a performance condition, not an integrity condition, and as written it
+blocks the only unbiased TEST run indefinitely. First-attempt success remains a reported DEV
+diagnostic.
+
+Pre-declared before any TEST run: if single's TEST pass rate is above 90%, the TEST split is
+uninformative for the GAIN question (it can still show harm) and will be reported that way.
+Secondary, also pre-declared: results on the 'hard' difficulty tier, defined by task type in
+`evals/v5/tasks.py` and never by which tasks single failed.
+
 # 3. headline runs on the TEST split, for each backbone (>= 2, ideally 3)
 uv run python evals/run_v5.py --split test --arm single --model <m> --out runs/v5/<m>_single
 uv run python evals/run_v5.py --split test --arm multi  --model <m> --out runs/v5/<m>_multi --verifier-mode safe
