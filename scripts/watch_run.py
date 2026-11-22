@@ -21,7 +21,11 @@ def scan(run_dir: Path) -> dict:
     worst_tokens = worst_seconds = 0.0
     failed_ok = 0
     newest = 0.0
-    for path in (run_dir / "cases").glob("repeat-*-case-*.json"):
+    case_files = sorted((run_dir / "cases").glob("repeat-*-case-*.json"))
+    # v5 runner writes one file per task as task-NNNN.json. Keep both patterns so
+    # the same watchdog covers the frozen strong-run harness and evals/run_v5.py.
+    case_files += sorted((run_dir / "cases").glob("task-*.json"))
+    for path in case_files:
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError):

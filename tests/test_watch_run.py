@@ -69,6 +69,16 @@ def test_scan_only_reads_per_case_files(tmp_path):
     assert result["not_ok_cases"] == 0
 
 
+def test_v5_task_case_files_are_scanned(tmp_path):
+    run_dir = tmp_path / "run"
+    write_case(run_dir, "task-0007.json", tokens=321, seconds=5.0)
+
+    result = watch_run.scan(run_dir)
+    assert result["cases"] == 1
+    assert result["tokens"] == 321
+    assert result["worst_case_seconds"] == 5.0
+
+
 def test_total_token_abort_kills_process(tmp_path, monkeypatch, capsys):
     run_dir = tmp_path / "run"
     write_case(run_dir, "repeat-01-case-01.json", tokens=1200, seconds=2.0)
