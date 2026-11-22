@@ -1527,7 +1527,18 @@ question, truth SQL, truth value, a representative failure and the judgement
 that the truth SQL implements the single defensible reading.
 
 `docs/FINAL_REPORT.md` is the plain-language final write-up, including what was
-not reproduced, the strong-model gap and the exact unverified items.
+not reproduced, the blocked strong-model preflight and the exact unverified
+items.
+
+Strong-model preflight on 2026-11-22 added `scripts/watch_run.py` and
+`tests/test_watch_run.py`; the watchdog tests passed `8 passed in 0.10s` on the
+Windows host. `.env` was set to `LLM_MODEL_STRONG=deepseek-flash` and frozen
+truth validation passed `20/20`. Two DeepSeek smoke calls then returned `402
+Insufficient Balance`, so the pre-agreed abort rule stopped the sequence before
+the mini run, single arm or multi arm. No strong score, no billed amount and no
+strong/local comparison were produced. DeepSeek thinking remains at the
+provider default (ON), so any future strong run would not be directly
+comparable to the local non-thinking `qwen2.5-coder:14b` runs.
 
 ## Conventions
 
@@ -1576,9 +1587,9 @@ not reproduced, the strong-model gap and the exact unverified items.
 | 3 | LLM client, runtime, security, single agent | done |
 | 4 | schema prompt, geocoder, charts, frozen v2 baseline | done |
 | 5 | coordinator, workers, verifier | implemented; official 3-repeat 41/60 vs single 46/60 (p=0.109; 5.21x tokens) - no gain |
-| 5b | matched-budget multi audit, verifier modes, v3 prompt | v3 rerun done: 40/60 multi vs 45/60 single (p=0.289) - negative; flag 12/42 complete; single-verified 35/42 vs single 34/42 (p=1.000) - not significant; none incomplete (21/42); strong API stopped because all `*_STRONG` variables are unset |
+| 5b | matched-budget multi audit, verifier modes, v3 prompt | v3 rerun done: 40/60 multi vs 45/60 single (p=0.289) - negative; flag 12/42 complete; single-verified 35/42 vs single 34/42 (p=1.000) - not significant; none incomplete (21/42); strong API later configured; smoke blocked by DeepSeek 402 Insufficient Balance (2026-11-22) |
 | 6 | relevance gate, knowledge retrieval, verifier tuning | implemented; live gate calibration theta=0.54, held-out 0.743; live premise traps 1/10 (diagnostic, not a benchmark); strict transcripts in `docs/premise_trap_transcripts.md` |
 | 7 | FastAPI SSE API and ECharts demo UI | implemented; 224 tests pass; timeout-poison 503 guard added; live demo 5/5 HTTP 200: single 4/4 answered, but the multi Tai Po run joined weather on the wrong key, returned no data and the verifier confirmed that wrong answer |
 | 8 | deterministic Tai Po reference, daemon | implemented; reference 21/21 checks, paper targets reproduced, daemon replay 0 triggers; live v3 agent-to-reference 0/24 fields, 0/3 ANSWER dicts, 0/3 charts - single arm failed, reference valid |
-| 9 | v4 paired view, prompt affordance, matched rerun, reference UI | done; paired view migration + regression tests, base hash `ff04f301...`, single 47/60 vs multi 39/60 (McNemar p=0.3438), deterministic `/api/reference/tai_po` and UI section; strong-model evaluation still blocked by unset `*_STRONG` credentials |
-| 10 | never-solved audit, subprocess runtime, Docker packaging, final write-up | done; `docs/never_solved_cases.md`, spawn-backed API runtime, `Dockerfile`/compose API service, `docs/FINAL_REPORT.md`; 237 tests pass with the database up; strong-model run still blocked by unset `*_STRONG` credentials |
+| 9 | v4 paired view, prompt affordance, matched rerun, reference UI | done; paired view migration + regression tests, base hash `ff04f301...`, single 47/60 vs multi 39/60 (McNemar p=0.3438), deterministic `/api/reference/tai_po` and UI section; strong-model evaluation attempted; blocked by DeepSeek 402 Insufficient Balance (no charge or run) |
+| 10 | never-solved audit, subprocess runtime, Docker packaging, final write-up | done; `docs/never_solved_cases.md`, spawn-backed API runtime, `Dockerfile`/compose API service, `docs/FINAL_REPORT.md`; 238 passed, 1 skipped with DB up; after watchdog 239 passed, 8 skipped with DB stopped; strong-model run attempted, blocked by 402 |

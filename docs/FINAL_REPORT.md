@@ -38,8 +38,11 @@ scrubbed environment and a fresh empty working directory. A timeout kills that
 child. This is better than the old in-process execution, but it is not a
 container: the child is the same OS user and can still reach the network.
 
-Strong-model evaluation was not run. The three `*_STRONG` variables in `.env`
-are empty, and no substitute model was used.
+Strong-model evaluation was attempted but blocked before any run. The three
+`*_STRONG` variables are set to `deepseek-flash`, `https://api.deepseek.com` and
+a local key; frozen truth validation passed 20/20, but two smoke calls returned
+`402 Insufficient Balance`. No strong run was made, no charge occurred and no
+substitute model was used (section 6.2).
 
 ## 2. Component status
 
@@ -55,7 +58,7 @@ are empty, and no substitute model was used.
 | Paired weather view / v4 prompt affordance | Done | `scripts/migrate_views.py`, `tests/test_paired_view.py`; v4 hashes at `README.md:1374-1376` |
 | OS-level subprocess isolation for API | Done, limited | `core/subprocess_runtime.py:38,44,71,313,416`; tests at `tests/test_subprocess_runtime.py:51-186` and `tests/test_api.py:410` |
 | Docker packaging | Done; build and stack health verified | `Dockerfile`, `docker-compose.yml`; `docker_build_exit=0`, both services `healthy`, `/api/health` JSON in §6 |
-| Strong model on a stronger LLM | Missing / blocked | `.env:13` `LLM_MODEL_STRONG=`, `.env:14` `LLM_BASE_URL_STRONG=`, `.env:15` `LLM_API_KEY_STRONG=` |
+| Strong model on a stronger LLM | Attempted, blocked by 402 | `deepseek-flash` configured; truth validation `20/20`; two smoke calls `402 Insufficient Balance`; no run artifacts (§6.2) |
 | Traffic and emission data case study | Missing | No traffic/emission table is present in the 14-table list at `README.md:125-129` |
 | Lag-correlation case study | Missing | Only the single correlation case #14 exists (`docs/never_solved_cases.md:77-142`); it passed 1/18 slots |
 | Expert panel / human evaluation | Missing | No expert panel artifact exists in this repository; this report does not claim one |
@@ -196,10 +199,26 @@ uv run pytest -q
 238 passed, 1 skipped in 28.41s
 ```
 
-The one skip is the Linux-only `/proc/self/environ` check
-(`tests/test_subprocess_runtime.py:129`). The subprocess file alone on the same
-host reported `11 passed, 2 skipped in 13.99s`; the second skip was the DB-live
-test because the database was stopped at that moment.
+After the budget watchdog was added, the same Windows host reported its own
+watchdog file result and then the full suite with the database stopped:
+
+```
+uv run pytest -q tests/test_watch_run.py
+8 passed in 0.10s
+
+uv run pytest -q
+239 passed, 8 skipped in 37.33s
+```
+
+The seven extra skips relative to the database-up run are DB-live tests; the
+remaining skip is the Linux-only `/proc/self/environ` check. No test was edited
+to hide a failure.
+
+For the database-up run shown first, the one skip is the Linux-only
+`/proc/self/environ` check (`tests/test_subprocess_runtime.py:129`). The
+subprocess file alone on the same host reported `11 passed, 2 skipped in
+13.99s`; the second skip was the DB-live test because the database was stopped
+at that moment.
 
 The same file was then run inside the freshly rebuilt Linux `api` container
 with the database healthy. pytest was already available through the image's
@@ -287,6 +306,51 @@ This confirms the UI's SSE path, the subprocess runtime, the read-only DB role
 and a real local LLM answer work together end to end. It is still one query, not
 a full benchmark rerun, and no browser screenshot was captured.
 
+### 6.2 Strong-model preflight: watchdog, validation and 402 stop
+
+On 2026-11-22 (Sunday, off-peak) the strong-model path was prepared without
+touching frozen files. A new budget watchdog was added at `scripts/watch_run.py`
+with tests at `tests/test_watch_run.py`. It reads only per-case artifacts under
+`<run>/cases/repeat-*-case-*.json`, ignores top-level `run.json` and
+`run_meta.json`, and aborts on total tokens, one-case tokens, one-case seconds
+or idle time. `--max-not-ok` defaults to off because `ok=false` is an answer
+failure, not an infra error. On the Windows host:
+
+```
+uv run pytest -q tests/test_watch_run.py
+8 passed in 0.10s
+```
+
+`.env` was changed only to set `LLM_MODEL_STRONG=deepseek-flash` (the old
+`deepseek-v4-flash` is a retired alias), `LLM_BASE_URL_STRONG=https://api.deepseek.com`
+and a local key. The key was never printed. Docker Desktop was started and the
+existing DB volume was reused; no `init_db.py --reset` was run.
+
+Frozen truth SQL validation initially failed because the DB was not listening
+on `127.0.0.1:5432`. After the existing `db` service was healthy, the exact
+harness command passed:
+
+```
+uv run python evals/run_baseline.py --validate-only
+[ok] 20 truth values match their pinned values
+validate_exit=0
+```
+
+A smoke call used the OpenAI SDK with `model=deepseek-flash`, default provider
+thinking, no `extra_body`, and `temperature=0.2` (ignored by thinking mode).
+No `max_tokens` was set. It returned `402 Insufficient Balance` twice, with
+request IDs `ade5b7e4-3964-4b64-8868-a5dab50ac771` and
+`ccbc5b57-b692-439f-952c-629b92cd096d`. Per the pre-agreed abort rule, the
+second 402 stopped the sequence. No charge occurred, no `PROVENANCE.md`, mini
+run, single run or multi run was created, and no run artifact was staged.
+
+Because no strong-model response was received, the report records no strong
+score, no `T` tokens-per-case estimate and no strong/local comparison. DeepSeek
+thinking is enabled by default at effort `high`; reasoning appears in
+`reasoning_content` and the frozen harness reads only `content`. This run would
+therefore not be directly comparable to the local non-thinking `qwen2.5-coder:14b`
+runs. Official pricing was read on 2026-11-21; actual billing was never observed.
+
 ## 7. Honest conclusion
 
 The multi-agent gain was **not** reproduced with `qwen2.5-coder:14b`: v4 multi
@@ -304,8 +368,10 @@ case #18 has no deterministic tie-break in its truth SQL.
 
 A strong-model run would test whether the same tasks and contracts improve when
 the model is large enough to hold the eight-field `ANSWER` schema and the
-weather-pairing rules. It would not fix the missing traffic/emission data or
-substitute for an expert panel.
+weather-pairing rules. That run was prepared but blocked by two `402
+Insufficient Balance` smoke responses, so no strong score exists. Even if it
+had run, it would not have fixed the missing traffic/emission data or
+substituted for an expert panel.
 
 ## 8. Reproduction
 
@@ -338,10 +404,11 @@ Start-Process http://localhost:8000/
 
 ## 9. Unverified items and gaps
 
-- Strong-model evaluation: not run; all three `*_STRONG` variables are empty
-  (`.env:13-15`). No substitute model was used. Official DeepSeek pricing was
-  read on 2026-11-21, but payment availability from Bangladesh, the actual
-  billed amount and the thinking-mode decision remain unverified/not chosen.
+- Strong-model evaluation: attempted on 2026-11-22 but stopped after two smoke
+  calls returned `402 Insufficient Balance` (section 6.2). The three `*_STRONG`
+  variables are set, not empty. No strong score, no billed amount and no
+  strong/local comparison exist. Thinking stays at the provider default (ON);
+  official DeepSeek pricing was read on 2026-11-21.
 - Linux was verified inside the `api` container, not on a separate bare-metal
   Linux host. Windows was verified on the host.
 - The local Docker config had a stale `credsStore: "desktop"`; removing it was
