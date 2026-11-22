@@ -22,6 +22,8 @@ from typing import Any, Awaitable, Callable, Mapping
 from core.agent import BUDGET_EXHAUSTED_SENTINEL, WorkerResult, extract_code, run_worker
 from core.llm import snapshot_usage
 from core.runtime import PythonRuntime
+from core.verifier_safe import UNSET as _UNSET
+from core.verifier_safe import is_sentinel_text, resolve as _resolve_write
 
 PLAN_ROLES = (
     "data_acquisition",
@@ -105,6 +107,11 @@ class PipelineResult:
     verifier_changed_answer: bool = False
     verifier_mismatch: bool = False
     stall_count: int = 0
+    # v5: per-variable snapshots (name -> value or None when unset) and the
+    # verifier writes that verifier_mode="safe" refused.
+    vars_pre_verify: dict[str, Any] = field(default_factory=dict)
+    vars_post_verify: dict[str, Any] = field(default_factory=dict)
+    verifier_rejections: list[str] = field(default_factory=list)
 
     @property
     def planner_tokens(self) -> int:
@@ -132,14 +139,30 @@ class PipelineResult:
             "verifier_changed_answer": self.verifier_changed_answer,
             "verifier_mismatch": self.verifier_mismatch,
             "stall_count": self.stall_count,
+            "vars_pre_verify": {k: _jsonable(v) for k, v in self.vars_pre_verify.items()},
+            "vars_post_verify": {k: _jsonable(v) for k, v in self.vars_post_verify.items()},
+            "verifier_rejections": list(self.verifier_rejections),
         }
 
 
-_UNSET = object()
+
+def _answer_snapshot(runtime: PythonRuntime, name: str = "ANSWER") -> Any:
+    return runtime.ns[name] if name in runtime.ns else _UNSET
 
 
-def _answer_snapshot(runtime: PythonRuntime) -> Any:
-    return runtime.ns["ANSWER"] if "ANSWER" in runtime.ns else _UNSET
+def _jsonable(value: Any) -> Any:
+    if value is _UNSET:
+        return None
+    if hasattr(value, "item") and getattr(value, "size", 1) == 1:
+        try:
+            value = value.item()
+        except Exception:  # noqa: BLE001
+            pass
+    if value is None or isinstance(value, (bool, int, str)):
+        return value
+    if isinstance(value, float):
+        return value if value == value and value not in (float("inf"), float("-inf")) else repr(value)
+    return repr(value)
 
 
 def _answers_equal(left: Any, right: Any) -> bool:
@@ -331,6 +354,7 @@ async def run_pipeline(
     verify_reserve: int = DEFAULT_VERIFY_RESERVE,
     synth_reserve: int = DEFAULT_SYNTH_RESERVE,
     verifier_mode: str = "overwrite",
+    answer_vars: tuple[str, ...] = ("ANSWER",),
     emit: Emit = lambda *a: None,
 ) -> PipelineResult:
     """Run planner -> workers -> independent verifier on one shared runtime.
@@ -348,8 +372,17 @@ async def run_pipeline(
         reverted; the synthesis answer remains the scored answer.
     ``none``
         skip the verifier and give its reserve to the producer pool.
+    ``safe``
+        v5: like ``overwrite`` but a verifier write is refused (and the staged
+        value restored) when it is NaN/inf, a non-scalar, or text over a number,
+        and a verifier that ended on a harness sentinel does not replace the
+        synthesis text. See ``core/verifier_safe.py``.
+
+    ``answer_vars`` names the runtime variables that constitute the answer
+    (default ``("ANSWER",)``, the v2-v4 contract). The v5 benchmark passes the
+    task's required output variables instead.
     """
-    if verifier_mode not in {"overwrite", "flag", "none"}:
+    if verifier_mode not in {"overwrite", "flag", "none", "safe"}:
         raise ValueError(f"unknown verifier_mode: {verifier_mode!r}")
     max_total = max(1, int(max_total))
     if verifier_mode == "none":
@@ -425,7 +458,10 @@ async def run_pipeline(
 
     # Snapshot the synthesis result before the verifier can touch the runtime.
     # This is the "multi without verifier" arm and costs no extra run.
-    pre_answer_raw = _answer_snapshot(runtime)
+    pre_vars = {name: _answer_snapshot(runtime, name) for name in answer_vars}
+    pre_answer_raw = pre_vars.get("ANSWER", _UNSET)
+    if "ANSWER" not in answer_vars and answer_vars:
+        pre_answer_raw = pre_vars[answer_vars[0]]
     answer_pre_verify = None if pre_answer_raw is _UNSET else pre_answer_raw
     final_text_pre_verify = final_text
 
@@ -435,6 +471,7 @@ async def run_pipeline(
     verifier_text = ""
     verifier_changed_answer = False
     verifier_mismatch = False
+    verifier_rejections: list[str] = []
     if verifier_mode != "none" and verify_budget > 0:
         verify_task = query + task_suffix
         verify_system = _worker_system(
@@ -459,18 +496,34 @@ async def run_pipeline(
         used += verifier.steps
         worker_runs.append(_run_record("verification", verify_task, verify_budget, verifier))
         verifier_text = verifier.final_text.strip()
-        post_answer_raw = _answer_snapshot(runtime)
-        verifier_changed_answer = not _answers_equal(pre_answer_raw, post_answer_raw)
+        post_vars = {name: _answer_snapshot(runtime, name) for name in answer_vars}
+        verifier_changed_answer = any(
+            not _answers_equal(pre_vars[name], post_vars[name]) for name in answer_vars
+        )
         verifier_mismatch = verifier_changed_answer or "MISMATCH" in verifier_text.upper()
+
+        def _restore(name: str) -> None:
+            if pre_vars[name] is _UNSET:
+                runtime.ns.pop(name, None)
+            else:
+                runtime.ns[name] = pre_vars[name]
 
         if verifier_mode == "flag":
             # The verifier's audit is evidence, not an authority. Put the
             # synthesis answer back and score the pre-verifier result.
-            if pre_answer_raw is _UNSET:
-                runtime.ns.pop("ANSWER", None)
-            else:
-                runtime.ns["ANSWER"] = pre_answer_raw
+            for name in answer_vars:
+                _restore(name)
             final_text = final_text_pre_verify or verifier_text
+        elif verifier_mode == "safe":
+            for name in answer_vars:
+                decision = _resolve_write(pre_vars[name], post_vars[name])
+                if not decision.accept:
+                    _restore(name)
+                    verifier_rejections.append(f"{name}: {decision.reason}")
+            if verifier_text and not is_sentinel_text(verifier_text):
+                final_text = verifier_text
+            else:
+                final_text = final_text_pre_verify or verifier_text
         else:
             # overwrite: the current Day 5 behaviour.
             if verifier_text:
@@ -504,4 +557,10 @@ async def run_pipeline(
         verifier_changed_answer=verifier_changed_answer,
         verifier_mismatch=verifier_mismatch,
         stall_count=stall_count,
+        vars_pre_verify={k: (None if v is _UNSET else v) for k, v in pre_vars.items()},
+        vars_post_verify={
+            name: (None if _answer_snapshot(runtime, name) is _UNSET else _answer_snapshot(runtime, name))
+            for name in answer_vars
+        },
+        verifier_rejections=verifier_rejections,
     )
