@@ -127,45 +127,59 @@ multi_prompts_sha256   9abd475abb3abebc72add25cde4950a5916926c02184610bdae28b138
 tasks_file  evals/v5/tasks_v5.json
 ```
 
-The multi-arm dev run in `runs/v5/qwen14b_dev_multi` stopped at **24/53 cases** with no
-`run.json`. A foreground resume attempt failed at prompt-hash setup:
+The multi-arm dev run initially stopped at 24/53 because Docker and Ollama were down. No DB
+reset was attempted. Docker Desktop and `ollama serve` were restarted; the 29 `infra_failed`
+case files (`tokens=0`, `steps=0`) were removed and only those task IDs were rerun. The final
+run is complete with 53 cases and zero infra retries.
+
+Multi-arm dev run, Windows host, final:
 
 ```
-psycopg2.OperationalError: connection to server at "127.0.0.1", port 5432 failed:
-Connection refused (0x0000274D/10061)
+uv run python evals/run_v5.py --split dev --arm multi --out runs/v5/qwen14b_dev_multi --model qwen2.5-coder:14b --base-url http://127.0.0.1:11434/v1 --verifier-mode safe
 ```
 
-`docker compose ps` then failed because the Docker daemon was down:
+Summary:
 
 ```
-failed to connect to the docker API at npipe:////./pipe/dockerDesktopLinuxEngine;
-check if the path is correct and if the daemon is running
+n=53, pass=42, accuracy=0.7925, first_attempt_success=0.9811, infra_retries_total=0
+by_category: comparative 9/11, multitable 2/8, retrieval 11/11, spatial 9/10, statistics 8/9, temporal 3/4
+pass_pre_verify=27, stalls=22, verifier_rejections=2
 ```
 
-No DB reset was attempted. The multi dev arm is therefore **incomplete**, and no paired
-final dev comparison was produced.
+Paired dev comparison, Windows host:
 
-### Gate A assessment (partial multi run, 23/53 cases)
+```
+uv run python evals/compare_v5.py --pair runs/v5/qwen14b_dev_single runs/v5/qwen14b_dev_multi
+```
+
+Result:
+
+```
+n=53, single=49, multi=42, gain_pp=-13.2, wins=2, losses=9, mcnemar_p=0.0654
+token_ratio_median=4.47, first_attempt_single=0.962, first_attempt_multi=0.981
+bootstrap95_pp=[-24.5, -1.9]
+by_category(single/multi of n): comparative 11/9 of 11, multitable 7/2 of 8, retrieval 11/11 of 11, spatial 9/9 of 10, statistics 8/8 of 9, temporal 3/3 of 4
+```
+
+### Gate A assessment (final multi run)
 
 `docs/V5_PLAN.md:30-34` requires both arms to have `first_attempt_success >= 0.95` **and**
-multi stalls `~ 0`. Single is `0.9623`. Multi was `0.9565` at 23 cases, but the partial run
-has **10 real stall-guard firings across 9 cases** (task 0059 has two). These are genuine
+multi stalls `~ 0`. First-attempt success passes (`0.9623` single, `0.9811` multi), but the
+final multi run has **22 real stall-guard firings**. These are genuine
 consecutive-identical-code interruptions (`core/orchestrator.py:302-323`, `:415-420`), not an
-aggregation artifact. Eight are verifier stalls; `verifier_mode="safe"` discards verifier
-sentinel text (`core/orchestrator.py:517-526`, `core/verifier_safe.py:36-41`), so most did not
-overwrite a scored answer, but they still fail the written `stalls ~ 0` condition.
+aggregation artifact. `verifier_mode="safe"` discards verifier sentinel text
+(`core/orchestrator.py:517-526`, `core/verifier_safe.py:36-41`), so many did not overwrite a
+scored answer, but they still fail the written `stalls ~ 0` condition.
 
 The `last_error` strings are mostly recovered intermediate attempts (`evals/run_v5.py:144`,
-`core/runtime.py:185-188`), not final failures. At the 23-case snapshot, 14 cases with an
-`ERROR` string ultimately passed; only task 0031 (`TypeError`) and 0059 (`UndefinedColumn`)
-failed among those.
+`core/runtime.py:185-188`), not final failures. The remaining repeats follow model-authored
+code errors (`SecurityError: globals()`, `NameError: ANSWER`, `KeyError: 'o3'`, wrong SQL
+column, etc.), not the already-patched `exit()`/numpy issues. A harness-only change cannot
+honestly reduce them to `~0` without masking the metric or tuning prompts, so Gate A is
+**not passed** and no TEST-split run was started.
 
-The remaining repeats follow model-authored code errors (`SecurityError: globals()`,
-`NameError: ANSWER`, `KeyError: 'o3'`, wrong SQL column, etc.), not the already-patched
-`exit()`/numpy issues. A harness-only change cannot honestly reduce them to `~0` without
-masking the metric or tuning prompts, so Gate A is **not passed** on the available evidence.
-Because the run stopped at 24/53 and the gate already fails on stalls, no TEST-split run was
-started.
+The dev result itself is negative: multi is 13.2 pp below single on the dev split, with a
+negative bootstrap interval. This is a gate/development diagnostic, not the frozen TEST result.
 
 A transient `pm2_5_data_jan_2025.csv` appeared in the repository root during the dev run. It was
 not part of the pack, was not committed, and was removed before staging.
