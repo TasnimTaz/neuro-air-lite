@@ -11,8 +11,10 @@ We built a small Hong Kong air-quality analyst. It reads a read-only copy of a
 Postgres/PostGIS database, lets a language model write Python to answer
 questions, and shows the numbers and charts in a browser. The database holds
 2025 station readings, weather, and map features. A separate, fixed file holds a
-deterministic Tai Po reference answer that the browser can show without any AI
-or database call.
+deterministic Tai Po reference answer that the JSON endpoint serves without any
+AI or database call. The visual UI no longer renders that panel; a non-rendered
+template preserves the static-test contract (`api/static/index.html:296-304`,
+`api/static/app.js:663-664`).
 
 The paper's multi-agent idea was that several specialist agents plus a verifier
 would beat one agent. We tested that with one local 14-billion-parameter model,
@@ -398,7 +400,8 @@ Invoke-RestMethod http://localhost:8000/api/reference/tai_po | Select-Object ok,
 # 4. Ask one live question through the UI's SSE endpoint.
 curl.exe -N -X POST http://localhost:8000/api/chat -H "Content-Type: application/json" -d '{"query":"What was the PM2.5 reading at Tai Po at noon on 7 January 2025?","arm":"single"}'
 
-# 5. Open the browser UI and the deterministic-reference section.
+# 5. Open the browser UI. The deterministic reference is no longer rendered;
+#    the endpoint in step 3 remains the checkable artifact.
 Start-Process http://localhost:8000/
 ```
 

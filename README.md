@@ -1327,7 +1327,7 @@ The difference is the merged-role addendum, so the evaluated base prompt was not
 edited. The artifact is `runs/reference_compare/day8_single_3x/run.json`
 (gitignored).
 
-## v4: paired weather view, prompt affordance and deterministic reference UI
+## v4: paired weather view, prompt affordance and deterministic reference endpoint
 
 This pre-registered v4 supersedes the earlier freeze for
 `domains/hk/schema_prompt.py` only. The cases, truth values, tolerances,
@@ -1389,16 +1389,16 @@ semantically reasonable answer. The reviewer guidance is to use the gate's
 held-out `74.3%` accuracy and nine out-of-scope leaks as an advisory “may be out
 of scope” warning, not a hard block; premise checking stays inside the agent.
 
-### Deterministic reference endpoint and UI
+### Deterministic reference endpoint
 
 `GET /api/reference/tai_po` returns the committed
 `docs/tai_po_reference.json` plus two deterministic ECharts configs. It reads
-only that file: no LLM call and no database connection. `api/static/index.html`
-adds a “Deterministic reference (no AI)” section, and `api/static/app.js`
-renders the key numbers, the `anomaly_assessment` raw-ratio-versus-z contrast,
-the network rise, `supports_local_plume`, the screening-not-causal caveat and
-the two charts. All dynamic text is assigned through `textContent` or escaped
-before markup; `tests/test_ui_static.py` now asserts this shape.
+only that file: no LLM call and no database connection. The deterministic panel
+was later removed from the visual dashboard. `api/static/index.html:296-304`
+keeps a non-rendered `<template id="reference-template">` so static UI tests
+still have the expected ids, and `api/static/app.js:663-664` exits
+`loadReference()` when the host is inside that template. The endpoint remains
+the checkable artifact; no browser page shows those precomputed values.
 
 ### v4 matched rerun results
 
@@ -1591,5 +1591,5 @@ comparable to the local non-thinking `qwen2.5-coder:14b` runs.
 | 6 | relevance gate, knowledge retrieval, verifier tuning | implemented; live gate calibration theta=0.54, held-out 0.743; live premise traps 1/10 (diagnostic, not a benchmark); strict transcripts in `docs/premise_trap_transcripts.md` |
 | 7 | FastAPI SSE API and ECharts demo UI | implemented; 224 tests pass; timeout-poison 503 guard added; live demo 5/5 HTTP 200: single 4/4 answered, but the multi Tai Po run joined weather on the wrong key, returned no data and the verifier confirmed that wrong answer |
 | 8 | deterministic Tai Po reference, daemon | implemented; reference 21/21 checks, paper targets reproduced, daemon replay 0 triggers; live v3 agent-to-reference 0/24 fields, 0/3 ANSWER dicts, 0/3 charts - single arm failed, reference valid |
-| 9 | v4 paired view, prompt affordance, matched rerun, reference UI | done; paired view migration + regression tests, base hash `ff04f301...`, single 47/60 vs multi 39/60 (McNemar p=0.3438), deterministic `/api/reference/tai_po` and UI section; strong-model evaluation attempted; blocked by DeepSeek 402 Insufficient Balance (no charge or run) |
+| 9 | v4 paired view, prompt affordance, matched rerun, reference UI | done; paired view migration + regression tests, base hash `ff04f301...`, single 47/60 vs multi 39/60 (McNemar p=0.3438), deterministic `/api/reference/tai_po` endpoint; visual reference removed from UI and kept as a non-rendered template; strong-model evaluation attempted, blocked by DeepSeek 402 Insufficient Balance (no charge or run) |
 | 10 | never-solved audit, subprocess runtime, Docker packaging, final write-up | done; `docs/never_solved_cases.md`, spawn-backed API runtime, `Dockerfile`/compose API service, `docs/FINAL_REPORT.md`; 238 passed, 1 skipped with DB up; after watchdog 239 passed, 8 skipped with DB stopped; strong-model run attempted, blocked by 402 |
