@@ -5,3 +5,6 @@
 *.pdf binary
 *.pkl binary
 *.parquet binary
+
+# Vendored paper fixtures must remain byte-for-byte identical to source commit.
+evals/vendor/neuroair_hk12/** -text

@@ -1,0 +1,41 @@
+# Vendored Neuro-Air HK-12 validators
+
+Source: https://github.com/acodercat/Neuro-Air
+Source commit: dbc47f0c9e2192d204a04e848b253953eb1afd72
+License: MIT (copied verbatim as LICENSE from the source repository root).
+
+The files under the category directories are byte-for-byte copies of the 12 HK task JSON files and validator Python modules from `benchmark/evals/neuroair/*/HK/`. They are data/fixtures for the external anchor adapter, not part of this project's core prompts, roles, runtime, scorer, or benchmark. Do not edit them: update only by re-vendoring from the source commit and refreshing the hashes below.
+
+`pv_matrix.json` is a byte-for-byte copy of `benchmark/experiments/Neuro-Air/pv_matrix.json` from the same commit.
+
+## SHA256
+
+e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  comparative_assessment/HK/__init__.py
+4f0b5752564358a8557cd9205e9760ce80cf3e66e90bd5c39978ef23040d3828  comparative_assessment/HK/hk_1_11.json
+2767fede6e9b176f85aa6495c79ec005b3524ece57692daecdb882ef638e6514  comparative_assessment/HK/hk_1_11.py
+49d39e6041f8e21d72d9eb92c5a9cf3387eb1fd3d85068e097b4e183b3ad99cb  comparative_assessment/HK/hk_1_13.json
+6990567317378801102338c98d6e179d2c9198027c07ab03dc17ca9f28368ec2  comparative_assessment/HK/hk_1_13.py
+a5b9bacd572f60e7882f039436c23700f7560bbeb7cb3c801ab7ac44ba16bc4f  comparative_assessment/HK/hk_1_2.json
+e95e6442c31891fc62d3729136996bc65e9b4cdef9e60055e37e7abf3642e027  comparative_assessment/HK/hk_1_2.py
+5c310c012cc61ca954612bb6b366b15c95a71c98129c6de5526330bf67a0f612  comparative_assessment/HK/hk_1_5.json
+c832a479c2a0afb6c866e6acd588717207a63412ee2d0084c00b5263a26634ee  comparative_assessment/HK/hk_1_5.py
+a29b1586c22dc57dc5f498530bdbd0e00f733f71b82b992dad73a047f3ceb605  comparative_assessment/HK/hk_1_6.json
+9bb08b33b2d7601f055420ea6b9c4d9aa2174298a3c3a040e8e927faf21838b0  comparative_assessment/HK/hk_1_6.py
+d92196c0b8212ec2fa753b85310cdcb0b957d025941ed34f3f17e4002db5d62a  comparative_assessment/HK/hk_2_6.json
+cd4d1d069b1c29384eb56b2480b55a23e52f9b11dad486c7afc09052451c7165  comparative_assessment/HK/hk_2_6.py
+00dcef8eddeb9dfe6daa20913f3375d869cdc0f67797ff7c61bbdd45b591577c  comparative_assessment/HK/hk_3_11.json
+c606d4d38c652410515530a170e019750c61f5a22565c12335cba76ab13a435e  comparative_assessment/HK/hk_3_11.py
+e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  data_retrieval/HK/__init__.py
+be5fd4186540fbb09b05308209a859d0da19a9d1e1d23031634f877889374c08  data_retrieval/HK/hk_1_1.json
+53b0f62ceac1c2086aa54d21d97cd329990a5efc5db25da1b80ec19b968fd1c5  data_retrieval/HK/hk_1_1.py
+f1ebc3fc59a996750f6d61acfbaf0f21a58ed8150979a210bbd8beb6b240e3f6  data_retrieval/HK/hk_1_10.json
+931797daa65661acee2b44c7c7383e69218423ca0e547ea5416f5a5b33a1b800  data_retrieval/HK/hk_1_10.py
+3182a1183716f8ee8fa224952d93ffc880b8cfa452284d00a9fc2aa92f0adb5c  data_retrieval/HK/hk_1_7.json
+d159a606ef7c874002f2bd275451779827feb997607f2b66ba164068a052a0b0  data_retrieval/HK/hk_1_7.py
+43186c51391066a9bf37f623349b9ef3e04e4342bff789f9f8371fbe6bb439c0  data_retrieval/HK/hk_2_18.json
+41bb8aba66eb04301cd4b3a9bb76d9985c201e514a78cce93636d2d9dc0bb70b  data_retrieval/HK/hk_2_18.py
+af4ad9b3a9ba2f34da0f7c9570d47e6400b5c93c5a989b07ca5416b957654718  LICENSE
+70ac70dd5cb567a0dc1dd835ddf2a32780fda76dd5f95ccbd9d1a7306d505952  pv_matrix.json
+e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  temporal_pattern_analysis/HK/__init__.py
+3571fefc13fc704d9085b1575a7f05413acccf0471b2637f3ba6ff19b47edb58  temporal_pattern_analysis/HK/hk_1_9.json
+a41a37248b0dee6c1ff345b6d19a94dd4eeff7f14164ddf973c1609a8cd64ae8  temporal_pattern_analysis/HK/hk_1_9.py
