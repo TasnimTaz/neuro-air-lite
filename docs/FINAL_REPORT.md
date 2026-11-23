@@ -1,9 +1,11 @@
-# Final report — Neuro-Air Lite, Day 10
+# Final report — Neuro-Air Lite (Day 10 build, Day 11 evidence)
 
-Date: 2026-11-21. Scope: v4 evaluation is frozen. Day 10 adds only the
-read-only audit, an alternative subprocess runtime for the API, packaging, and
-this write-up. No question, truth value, tolerance, scorer, role, eval script or
-in-process evaluation runtime was edited in this session.
+Date: 2026-11-23. Scope: v4 and the v5 dataset, runner, scorer and split
+definition are frozen. Day 10 added the read-only audit, the alternative
+subprocess runtime and packaging. Day 11 added the frozen v5 DEV diagnosis,
+the single TEST-split run, the external HK-12 anchor and this final evidence
+summary. No question, truth value, tolerance, scorer, role, eval script or
+split definition was edited after the freeze point.
 
 ## 1. One page in plain language
 
@@ -22,6 +24,23 @@ would beat one agent. We tested that with one local 14-billion-parameter model,
 single agent got 47 of 60 runs right; the multi-agent version got 39. The
 difference is not statistically significant. The verifier often repaired a
 wrong answer, but it also broke two right answers. Cost was higher for multi.
+
+We then built a larger frozen v5 benchmark (252 tasks; 53 DEV, 199 TEST) and
+fixed two real multi-harness defects before touching TEST. DEV remained a
+negative post-fix diagnostic: single 49/53 (92.5%), multi 42/53 (79.2%),
+`−13.2 pp`, `p=0.0654`. The pre-registered TEST rule was honoured: single scored
+91.5%, so TEST had too little headroom to show gain, but it could still show
+harm. It did: multi scored 166/199 (83.4%) against single 182/199 (91.5%),
+`−8.0 pp`, exact `p=0.0139`, bootstrap 95% CI `[−14.1, −2.0] pp`. Multi used
+4.89× the median tokens and 5.36× the summed wall-clock time.
+
+The paper's own 90-task result (`82.0% → 88.4%`, `+6.4 pp`, `p=2.5×10⁻⁵`) was
+not reproduced: the paper line-up and full original 90 tasks were not run, and
+only one local 14B backbone was available. As an external anchor we vendored the
+paper's public HK-12 fixtures and ran the local single arm: 11/36 (30.6%). The
+paper matrix is already at ceiling on those cells (119/120 passes), so HK-12
+cannot demonstrate gain either. Its paired multi arm was stopped at the
+pre-agreed ~2-hour cap (10/36) and is explicitly skipped, not scored.
 
 The Tai Po reference values were reproduced from the local data (for example
 NO2 123.2 at 20:00, z 1.91, 14-day maximum 125.5, PM2.5 rise 19.56, rank 1, and
@@ -44,7 +63,9 @@ Strong-model evaluation was attempted but blocked before any run. The three
 `*_STRONG` variables are set to `deepseek-flash`, `https://api.deepseek.com` and
 a local key; frozen truth validation passed 20/20, but two smoke calls returned
 `402 Insufficient Balance`. No strong run was made, no charge occurred and no
-substitute model was used (section 6.2).
+substitute model was used (section 6.2). In the Day 11 finalization session the
+same three variables were confirmed set as booleans only; their values were not
+printed and no strong endpoint was called for any v5 or HK-12 result.
 
 ## 2. Component status
 
@@ -136,6 +157,79 @@ repair to the verifier's recompute of the aggregation grain
 (`docs/never_solved_cases.md:144-198`). This is one case, and the overall paired
 test is not significant, so it is a hypothesis for a stronger-model rerun, not
 a claim that the multi arm generally helps.
+
+### 3.5 v5 DEV: exploratory post-fix negative
+
+The v5 pack added 252 stratified tasks with a fixed 53/199 DEV/TEST split
+(`evals/v5/tasks_v5.json`, task-file SHA256
+`af4b7e3ec9aca2a2b0850e4df3d09cc965eff30a6104c114ff47b9818fde1d5d`). Two
+harness fixes were made before TEST: a clean `exit()` in the shared Python
+runtime and named output variables required by the paper validators. The safety
+verifier (`verifier_mode="safe"`) was also selected after the earlier overwrite
+mode was seen replacing correct refusals with stall text.
+
+DEV was used only for diagnosis, never for tuning. Single scored **49/53
+(92.5%)**, multi **42/53 (79.2%)**: `−13.2 pp`, wins 2, losses 9, exact
+McNemar `p=0.0654`, bootstrap 95% CI `[−24.5, −1.9] pp`. Multi pre-verifier was
+27/53 and the verifier rescued 15, broke 0; first-attempt rates were 0.9623
+(single) and 0.9811 (multi), with 22 genuine stall events and 2 safe rejections.
+The original written Gate A also required multi stalls `~0`, so it **failed**;
+the gate was amended to integrity-only afterwards, with the original text kept
+verbatim in `docs/V5_PLAN.md`. Full diagnosis is in `docs/V5_DIAGNOSIS.md`.
+
+### 3.6 v5 TEST: frozen result and ceiling
+
+The TEST split was run once per arm with the frozen runner, 199 tasks, local
+`qwen2.5-coder:14b`, temperature `0.2`, 20 steps, the same prompts and
+`verifier_mode=safe`. Single produced 199 case files plus `run.json` with
+`infra_failed_task_ids=[]`; multi did the same. The original single wrapper
+disappeared at 197/199 with no watchdog abort and healthy services, so the same
+`--out` was resumed for only the two missing task IDs (`250`, `252`); this is
+the runner's built-in resume path, not a second TEST run. No watchdog `ABORT`
+was emitted.
+
+| Metric | Single | Multi | Difference |
+|---|---:|---:|---:|
+| Passed / total | 182/199 (91.5%) | 166/199 (83.4%) | −8.0 pp |
+| Wins / losses / ties | — | — | 11 / 27 / 161 |
+| Exact McNemar p | — | — | `0.0139` |
+| Paired bootstrap 95% CI (pp) | — | — | `[−14.1, −2.0]` |
+| First-attempt success | 178/199 (89.5%) | 176/199 (88.4%) | −1.1 pp |
+| Median token ratio (multi/single) | — | — | `4.89×` |
+| Summed wall-clock ratio | 3,763.1 s | 20,158.8 s | `5.36×` |
+| Pre-verifier pass | — | 90/199 (45.2%) | — |
+| Verifier rescued / broke / rejected | — | 77 / 1 / 6 | — |
+| Stall events | — | 68 across 59 cases | — |
+
+Hard tier was pre-declared from `evals/v5/tasks.py`, not from failed tasks:
+hard 62/73 vs 53/73, medium 101/107 vs 95/107, simple 19/19 vs 18/19
+(single vs multi). The largest multi losses were multitable (22/26 → 15/26)
+and spatial (43/46 → 36/46); temporal was the only category where multi was
+ahead (15/22 → 18/22).
+
+Because single exceeded the pre-declared 90% ceiling, TEST is uninformative for
+gain. It is informative for harm: the paired test is significant and the whole
+bootstrap interval is negative. Full evidence is in `docs/V5_TEST_REPORT.md`.
+
+### 3.7 External HK-12 anchor
+
+The public reference repository `acodercat/Neuro-Air` was fetched at commit
+`dbc47f0c9e2192d204a04e848b253953eb1afd72`. Twelve HK task JSON files, the
+matching validators and `pv_matrix.json` were vendored unchanged under
+`evals/vendor/neuroair_hk12/`; all 29 non-README blobs were re-verified
+byte-for-byte against the source commit in this session. The shim maps only
+paper ground-truth SQL station IDs `1..18` to the local IDs `19..36` and the one
+required output `higher_peak_station_id`; no question, role or scorer was
+edited. All 12 validators passed the smoke check.
+
+Local single (3 repeats per task) scored **11/36 (30.6%)** with zero infra
+retries and mean 36,483 tokens/case. The paper matrix for the same 12 tasks is
+59/60 single and 60/60 multi (119/120 cells; the only miss is
+`hk_1_10 / qwen-2.5-72b / single`). The multi arm was stopped at the ~2-hour
+Step 4 cap with 10/36 case files and no `run.json`, so **no paired HK-12 claim
+is made**. A visible limitation is that the original questions still name paper
+station IDs while our unchanged base prompt lists local IDs, so several tasks
+answer “data not available”. Details are in `docs/PAPER_HK12_ANCHOR.md`.
 
 ## 4. Isolation: what it covers and what it does not
 
@@ -355,33 +449,56 @@ runs. Official pricing was read on 2026-11-21; actual billing was never observed
 
 ## 7. Honest conclusion
 
-The multi-agent gain was **not** reproduced with `qwen2.5-coder:14b`: v4 multi
-scored 39/60 against single 47/60 and the paired test gave `p=0.3438`. This
-shows that this particular local model, prompt set and 20-task benchmark did not
-benefit from the coordinator/verifier structure. It does not prove that
-multi-agent systems can never help, and it does not test a stronger model.
+The multi-agent gain was **not** reproduced with `qwen2.5-coder:14b`. v4 multi
+scored 39/60 against single 47/60 with `p=0.3438`; the larger post-fix v5 DEV
+set scored 42/53 against 49/53 with `p=0.0654`; the frozen 199-task TEST set
+scored 166/199 against 182/199 with exact `p=0.0139`. TEST had a pre-declared
+single-arm ceiling above 90%, so it cannot show gain, but the observed effect is
+significant harm at 5.36× the summed wall-clock cost. This shows that this local
+model and these prompts did not benefit from the coordinator/verifier structure.
+It does not prove that multi-agent systems can never help; a harder benchmark
+with single-arm headroom and a stronger backbone remain untested.
 
-The v4 paired weather view fixed a real query-construction defect, but it did
-not make the multi arm win and did not fix the agent-to-reference contract. The
-never-solved audit did not find evidence that the benchmark answers are wrong;
-most failures are model-generated SQL mistakes. Two suspicious details remain
-honestly recorded: some scorer passes coexist with contradictory prose, and
-case #18 has no deterministic tie-break in its truth SQL.
+The v4 paired weather view fixed a real query-construction defect, and the v5
+runtime/verifier fixes removed real harness failure modes, but neither made
+multi win nor fixed the agent-to-reference contract. The never-solved audit did
+not find evidence that the benchmark answers are wrong; most failures are
+model-generated SQL mistakes. Two suspicious details remain honestly recorded:
+some scorer passes coexist with contradictory prose, and case #18 has no
+deterministic tie-break in its truth SQL.
 
-A strong-model run would test whether the same tasks and contracts improve when
-the model is large enough to hold the eight-field `ANSWER` schema and the
-weather-pairing rules. That run was prepared but blocked by two `402
-Insufficient Balance` smoke responses, so no strong score exists. Even if it
-had run, it would not have fixed the missing traffic/emission data or
-substituted for an expert panel.
+The paper's own `82.0% → 88.4%` result is not reproduced here, and the external
+HK-12 anchor is already at ceiling on the paper line-up (119/120 cells). Our
+local HK-12 single arm reached only 11/36, with a documented station-ID
+mismatch between the original paper questions and our unchanged base prompt;
+the paired multi arm was skipped under the time cap. A strong-model run would
+test whether the same tasks and contracts improve when the model is large
+enough to hold the eight-field `ANSWER` schema and the weather-pairing rules.
+The earlier attempt was blocked by two `402 Insufficient Balance` smoke
+responses, and in the Day 11 finalization session the configured strong keys
+were deliberately not used. No strong score exists. Even if one had run, it
+would not have fixed the missing traffic/emission data or substituted for an
+expert panel.
 
 ## 8. Reproduction
 
 ```powershell
 uv sync --frozen
-uv run pytest -q                       # 237 passed with DB up; skips if DB down
+uv run pytest -q                       # 316 passed, 1 skipped in 29.01s (Windows host)
 uv run python scripts/migrate_views.py # idempotent; no --reset
 docker compose --env-file .env --env-file "$HOME\.neuro-air\admin.env" build api
+docker compose --env-file .env --env-file "$HOME\.neuro-air\admin.env" run --rm api uv run pytest -q
+# 316 passed, 1 skipped in 25.20s (api container, after rebuilding the image
+# from the current tree; the stale image still reported 238/1)
+```
+
+Frozen evaluation checks:
+
+```powershell
+uv run python evals/compare_v5.py --pair runs/v5/qwen14b_test_single runs/v5/qwen14b_test_multi
+uv run pytest -q tests/test_paper_hk12.py tests/test_paper_vendor.py
+uv run python evals/paper_hk12.py --smoke
+uv run python evals/paper_hk12.py --arm single --repeats 3 --out runs/paper_hk12/qwen14b_single --model qwen2.5-coder:14b --base-url http://127.0.0.1:11434/v1
 ```
 
 Five-step demo:
@@ -411,7 +528,21 @@ Start-Process http://localhost:8000/
   calls returned `402 Insufficient Balance` (section 6.2). The three `*_STRONG`
   variables are set, not empty. No strong score, no billed amount and no
   strong/local comparison exist. Thinking stays at the provider default (ON);
-  official DeepSeek pricing was read on 2026-11-21.
+  official DeepSeek pricing was read on 2026-11-21. In the Day 11 finalization
+  session their presence was re-confirmed as booleans only; no strong value was
+  printed and no strong call was made.
+- v5 TEST cannot answer the gain question because single scored 91.5% and the
+  pre-declared ceiling applied. No harder-headroom benchmark, second local
+  backbone, paper five-model line-up or strong model was run, so the paper's
+  90-task gain remains unverified here.
+- HK-12 paired multi is skipped: the run was stopped at 10/36 case files under
+  the ~2-hour Step 4 cap, with no multi `run.json`. Only the completed single
+  arm (11/36) is reported; no HK-12 win, loss, significance or paired ceiling
+  claim is made from the partial multi files.
+- The machine-level Docker `~/.docker/config.json` again showed
+  `credsStore: "desktop"` during the final image rebuild; the key was removed
+  locally (outside the repo) and the rebuild succeeded. No credential file is
+  tracked.
 - Linux was verified inside the `api` container, not on a separate bare-metal
   Linux host. Windows was verified on the host.
 - The local Docker config had a stale `credsStore: "desktop"`; removing it was

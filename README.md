@@ -15,8 +15,9 @@ folder as `Neuro-Air 10-Day Implementation Plan (A to Z).pdf`.
 - [uv](https://docs.astral.sh/uv/)
 - Docker Desktop (PostGIS 16 + 3.4)
 - An OpenAI-compatible LLM endpoint. Development target is local Ollama
-  (`qwen2.5-coder:14b`); a stronger API model is swapped in for the Day 9
-  evaluation via `LLM_MODEL_STRONG`.
+  (`qwen2.5-coder:14b`). A stronger API model was configured for Day 9 via
+  `LLM_MODEL_STRONG`, but it was blocked by `402 Insufficient Balance` and was
+  deliberately not used for the Day 11 v5/HK-12 results.
 
 ## Setup
 
@@ -1526,9 +1527,9 @@ slots, and #15 passed 5 times. The four suspected cases are analysed there with
 question, truth SQL, truth value, a representative failure and the judgement
 that the truth SQL implements the single defensible reading.
 
-`docs/FINAL_REPORT.md` is the plain-language final write-up, including what was
-not reproduced, the blocked strong-model preflight and the exact unverified
-items.
+`docs/FINAL_REPORT.md` is the plain-language final write-up, including the v4,
+v5 DEV, v5 TEST and HK-12 evidence, what was not reproduced, the blocked
+strong-model preflight and the exact unverified items.
 
 Strong-model preflight on 2026-11-22 added `scripts/watch_run.py` and
 `tests/test_watch_run.py`; the watchdog tests passed `8 passed in 0.10s` on the
@@ -1539,6 +1540,36 @@ the mini run, single arm or multi arm. No strong score, no billed amount and no
 strong/local comparison were produced. DeepSeek thinking remains at the
 provider default (ON), so any future strong run would not be directly
 comparable to the local non-thinking `qwen2.5-coder:14b` runs.
+
+## Day 11: frozen v5 evaluation and external HK-12 anchor
+
+The v5 benchmark is frozen at 252 tasks (53 DEV, 199 TEST). `core/*`,
+`domains/hk/*`, `evals/v5/*`, `evals/run_v5.py` and the split definition were
+not edited. The final evidence chain is:
+
+- `docs/V5_DIAGNOSIS.md`: post-fix DEV diagnosis, single `49/53 (92.5%)` vs
+  multi `42/53 (79.2%)`, `−13.2 pp`, `p=0.0654`. The original Gate A failed on
+  22 stalls; it was amended to integrity-only afterwards and the original text
+  is retained in `docs/V5_PLAN.md`.
+- `docs/V5_TEST_REPORT.md`: one TEST run per arm. Single `182/199 (91.5%)` vs
+  multi `166/199 (83.4%)`, `−8.0 pp`, 11 wins / 27 losses / 161 ties, exact
+  McNemar `p=0.0139`, bootstrap 95% CI `[−14.1, −2.0] pp`. Single exceeded the
+  pre-declared 90% ceiling, so TEST cannot show gain; the significant negative
+  result is harm. Multi used `4.89×` median tokens and `5.36×` summed wall
+  clock. Hard tier was fixed by task type in `evals/v5/tasks.py` before TEST.
+- `docs/PAPER_HK12_ANCHOR.md`: public paper fixtures at commit
+  `dbc47f0c9e2192d204a04e848b253953eb1afd72`, vendored byte-for-byte with a
+  validator-only compatibility shim. Local single `11/36 (30.6%)`; paper matrix
+  `119/120` cells. Paired multi was skipped at the ~2-hour cap (10/36 case
+  files, no `run.json`), so no HK-12 paired claim is made.
+- The paper's `82.0% → 88.4%` (`+6.4 pp`, `p=2.5×10⁻⁵`) was **not**
+  reproduced. Only local `qwen2.5-coder:14b` was used. The `*_STRONG` keys are
+  set but were not used or printed.
+
+Final suites on the current tree: Windows host `316 passed, 1 skipped in
+29.01s`; rebuilt `api` container `316 passed, 1 skipped in 25.20s`. The stale
+image first reported `238 passed, 1 skipped` because it predated the new tests;
+the image was rebuilt and the suite rerun.
 
 ## Conventions
 
@@ -1593,3 +1624,4 @@ comparable to the local non-thinking `qwen2.5-coder:14b` runs.
 | 8 | deterministic Tai Po reference, daemon | implemented; reference 21/21 checks, paper targets reproduced, daemon replay 0 triggers; live v3 agent-to-reference 0/24 fields, 0/3 ANSWER dicts, 0/3 charts - single arm failed, reference valid |
 | 9 | v4 paired view, prompt affordance, matched rerun, reference UI | done; paired view migration + regression tests, base hash `ff04f301...`, single 47/60 vs multi 39/60 (McNemar p=0.3438), deterministic `/api/reference/tai_po` endpoint; visual reference removed from UI and kept as a non-rendered template; strong-model evaluation attempted, blocked by DeepSeek 402 Insufficient Balance (no charge or run) |
 | 10 | never-solved audit, subprocess runtime, Docker packaging, final write-up | done; `docs/never_solved_cases.md`, spawn-backed API runtime, `Dockerfile`/compose API service, `docs/FINAL_REPORT.md`; 238 passed, 1 skipped with DB up; after watchdog 239 passed, 8 skipped with DB stopped; strong-model run attempted, blocked by 402 |
+| 11 | frozen v5 DEV diagnosis, single TEST split, HK-12 external anchor, final docs | done; v5 TEST single 182/199 vs multi 166/199 (`−8.0 pp`, `p=0.0139`, ceiling >90% so harm not gain); HK-12 single 11/36, paper 119/120, paired multi skipped at ~2h cap; strong keys set but unused; final host and rebuilt-container suites both 316 passed, 1 skipped |
