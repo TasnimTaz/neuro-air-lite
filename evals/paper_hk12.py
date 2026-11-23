@@ -137,9 +137,11 @@ def compare_numeric(
 
 # The paper's HK schema numbers stations 1..18; this lite DB numbers the same
 # named stations 19..36. The mapping is from the paper's own schema prompt
-# (benchmark/domains/HK/prompts.py, commit dbc47f0c) and is injected only into
-# the vendored validators' read-only ground-truth SQL. Validator source files,
-# questions, roles, runtime and scorer are unchanged.
+# (benchmark/domains/HK/prompts.py, commit dbc47f0c). It is applied in two
+# deliberately separate places: (a) paper-station identifiers in the
+# model-facing query + requirements (identifier crosswalk only), and (b) the
+# vendored validators' read-only ground-truth SQL. Validator source files,
+# roles, runtime and scorer are unchanged. No other number is rewritten.
 PAPER_TO_LOCAL_STATION = {
     1: 20,   # Southern
     2: 32,   # North
@@ -161,6 +163,61 @@ PAPER_TO_LOCAL_STATION = {
     18: 25,  # Tsuen Wan
 }
 PAPER_FROM_LOCAL_STATION = {local: paper for paper, local in PAPER_TO_LOCAL_STATION.items()}
+QUESTION_CROSSWALK = "paper_station_ids_v1"
+
+
+def _map_station_prefix(match: re.Match[str]) -> str:
+    prefix, sid = match.groups()
+    mapped = PAPER_TO_LOCAL_STATION.get(int(sid))
+    return prefix + (str(mapped) if mapped is not None else sid)
+
+
+def _map_station_choices(match: re.Match[str]) -> str:
+    prefix, body, suffix = match.groups()
+
+    def one(m: re.Match[str]) -> str:
+        value = int(m.group(1))
+        return str(PAPER_TO_LOCAL_STATION.get(value, value))
+
+    return prefix + re.sub(r"\b(\d{1,2})\b", one, body) + suffix
+
+
+def crosswalk_station_ids(text: str) -> str:
+    """Map paper station IDs to local IDs in model-facing text only.
+
+    Rewrites exactly three forms: ``station_id: N`` / ``station_id = N``,
+    ``station N``, and the numeric choices inside ``higher_peak_station_id (...)``.
+    Dates, clock times, counts such as "all 18 monitoring stations", and
+    ``district_id`` are deliberately left alone. Local IDs (19..36) are not keys
+    in the map, so re-running the function is idempotent.
+    """
+    out = re.sub(
+        r"(\bstation_id\s*[:=]\s*)(\d{1,2})\b",
+        _map_station_prefix,
+        text,
+        flags=re.IGNORECASE,
+    )
+    out = re.sub(
+        r"(\bstation\s+)(\d{1,2})\b",
+        _map_station_prefix,
+        out,
+        flags=re.IGNORECASE,
+    )
+    out = re.sub(
+        r"(\bhigher_peak_station_id\s*\()([^)]*)(\))",
+        _map_station_choices,
+        out,
+        flags=re.IGNORECASE,
+    )
+    return out
+
+
+def crosswalk_manifest(tasks: list[PaperTask]) -> dict[str, dict[str, str]]:
+    """Original and crosswalked model-facing text for every vendored task."""
+    return {
+        task.name: {"raw": task.question_raw, "translated": task.question}
+        for task in tasks
+    }
 
 
 def paper_text(sql: str) -> Any:
@@ -263,8 +320,14 @@ class PaperTask:
     outputs: tuple[Output, ...]
 
     @property
-    def question(self) -> str:
+    def question_raw(self) -> str:
+        """Original paper query + requirements, kept verbatim for the record."""
         return self.query + "\n\n" + self.requirements
+
+    @property
+    def question(self) -> str:
+        """Model-facing text after the paper->local station identifier crosswalk."""
+        return crosswalk_station_ids(self.question_raw)
 
     def var_names(self) -> tuple[str, ...]:
         return tuple(o.var for o in self.outputs)
@@ -445,6 +508,8 @@ async def run_task(
             "difficulty": task.difficulty,
             "split": "external_hk12",
             "arm": arm,
+            "question_crosswalk": QUESTION_CROSSWALK,
+            "question_sha256": hashlib.sha256(task.question.encode("utf-8")).hexdigest(),
             "pass": bool(verdict["success"]),
             "validator": verdict,
             "steps": steps,
@@ -561,6 +626,13 @@ async def main_async(args: argparse.Namespace) -> int:
         "max_steps": args.max_steps,
         "verifier_mode": args.verifier_mode,
         "repeats": args.repeats,
+        "question_crosswalk": {
+            "name": QUESTION_CROSSWALK,
+            "applies_to": "model-facing query + requirements only",
+            "forms": ["station_id: N", "station_id = N", "station N", "higher_peak_station_id (N or M)"],
+            "untouched": ["district_id", "dates", "clock times", "station counts", "validator source", "validator SQL shim"],
+        },
+        "question_crosswalk_by_task": crosswalk_manifest(tasks),
         "source_repo": "https://github.com/acodercat/Neuro-Air",
         "source_commit": source_commit(),
         "vendor_sha256": {
@@ -577,7 +649,10 @@ async def main_async(args: argparse.Namespace) -> int:
     meta_path = out_dir / "run_meta.json"
     if meta_path.exists():
         old = json.loads(meta_path.read_text(encoding="utf-8"))
-        keys = ("model", "arm", "temperature", "max_steps", "verifier_mode", "repeats", "source_commit", "base_prompt_sha256")
+        keys = (
+            "model", "arm", "temperature", "max_steps", "verifier_mode", "repeats",
+            "source_commit", "base_prompt_sha256", "question_crosswalk",
+        )
         if any(old.get(k) != meta.get(k) for k in keys):
             print("[FAIL] resume refused: run_meta.json differs from current settings", file=sys.stderr)
             return 1

@@ -37,9 +37,14 @@ harm. It did: multi scored 166/199 (83.4%) against single 182/199 (91.5%),
 The paper's own 90-task result (`82.0% → 88.4%`, `+6.4 pp`, `p=2.5×10⁻⁵`) was
 not reproduced: the paper line-up and full original 90 tasks were not run, and
 only one local 14B backbone was available. As an external anchor we vendored the
-paper's public HK-12 fixtures and ran the local single arm: 11/36 (30.6%). The
-paper matrix is already at ceiling on those cells (119/120 passes), so HK-12
-cannot demonstrate gain either. Its paired multi arm was stopped at the
+paper's public HK-12 fixtures. The first local single score, 11/36 (30.6%), was
+inflated by an identifier mismatch: the paper's questions use station IDs
+1..18 while our prompt lists local IDs 19..36. After a question-text-only
+identifier crosswalk, the corrected single score is **14/36 (38.9%)**: the six
+ID-bearing tasks rose from 0/18 to 4/18, while the six ID-free tasks changed
+from 11/18 to 10/18. The paper matrix is already at ceiling on these cells
+(119/120 passes),
+so HK-12 cannot demonstrate gain either. Its paired multi arm was stopped at the
 pre-agreed ~2-hour cap (10/36) and is explicitly skipped, not scored.
 
 The Tai Po reference values were reproduced from the local data (for example
@@ -217,19 +222,26 @@ The public reference repository `acodercat/Neuro-Air` was fetched at commit
 `dbc47f0c9e2192d204a04e848b253953eb1afd72`. Twelve HK task JSON files, the
 matching validators and `pv_matrix.json` were vendored unchanged under
 `evals/vendor/neuroair_hk12/`; all 29 non-README blobs were re-verified
-byte-for-byte against the source commit in this session. The shim maps only
-paper ground-truth SQL station IDs `1..18` to the local IDs `19..36` and the one
-required output `higher_peak_station_id`; no question, role or scorer was
-edited. All 12 validators passed the smoke check.
+byte-for-byte against the source commit in this session. All 12 validators
+passed the smoke check. The shim maps paper ground-truth SQL station IDs
+`1..18` to local IDs `19..36` and the one required output
+`higher_peak_station_id`.
 
-Local single (3 repeats per task) scored **11/36 (30.6%)** with zero infra
-retries and mean 36,483 tokens/case. The paper matrix for the same 12 tasks is
-59/60 single and 60/60 multi (119/120 cells; the only miss is
-`hk_1_10 / qwen-2.5-72b / single`). The multi arm was stopped at the ~2-hour
-Step 4 cap with 10/36 case files and no `run.json`, so **no paired HK-12 claim
-is made**. A visible limitation is that the original questions still name paper
-station IDs while our unchanged base prompt lists local IDs, so several tasks
-answer “data not available”. Details are in `docs/PAPER_HK12_ANCHOR.md`.
+The first single run scored **11/36 (30.6%)** with the paper's original station
+IDs in the question text; this was an adapter artifact, not a model result. A
+question-text-only **identifier crosswalk** now maps paper station IDs to local
+IDs before the model sees the query and requirements; vendored files, roles,
+runtime and scorer are unchanged, and the raw and translated text for all 12
+tasks is recorded in the new `run.json`. The corrected single rerun scored
+**14/36 (38.9%)** with zero infra retries and mean 12,072 tokens/case:
+ID-bearing tasks improved `0/18 → 4/18`, ID-free tasks were `11/18 → 10/18`.
+The paper matrix is 59/60 single and 60/60 multi (119/120 cells; sole miss
+`hk_1_10 / qwen-2.5-72b / single`). The paired multi arm was not rerun; the
+earlier attempt stopped at the ~2-hour cap with 10/36 case files and no
+`run.json`, so **no paired HK-12 claim is made**. `hk_1_1` and `hk_1_9` remain
+0/3 even without IDs; their repeat-wise first failing checks are recorded in
+`docs/PAPER_HK12_ANCHOR.md`, but the root causes are not established here.
+Details are in `docs/PAPER_HK12_ANCHOR.md`.
 
 ## 4. Isolation: what it covers and what it does not
 
@@ -469,9 +481,10 @@ deterministic tie-break in its truth SQL.
 
 The paper's own `82.0% → 88.4%` result is not reproduced here, and the external
 HK-12 anchor is already at ceiling on the paper line-up (119/120 cells). Our
-local HK-12 single arm reached only 11/36, with a documented station-ID
-mismatch between the original paper questions and our unchanged base prompt;
-the paired multi arm was skipped under the time cap. A strong-model run would
+local HK-12 single arm reached 11/36 before an identifier crosswalk; the
+corrected question-text score is 14/36. The raw number was inflated by a
+station-ID mismatch between the paper questions and our local prompt, and the
+paired multi arm was skipped under the time cap. A strong-model run would
 test whether the same tasks and contracts improve when the model is large
 enough to hold the eight-field `ANSWER` schema and the weather-pairing rules.
 The earlier attempt was blocked by two `402 Insufficient Balance` smoke
@@ -484,22 +497,27 @@ expert panel.
 
 ```powershell
 uv sync --frozen
-uv run pytest -q                       # 316 passed, 1 skipped in 29.01s (Windows host)
+uv run pytest -q                       # 323 passed, 1 skipped in 30.33s (Windows host)
 uv run python scripts/migrate_views.py # idempotent; no --reset
 docker compose --env-file .env --env-file "$HOME\.neuro-air\admin.env" build api
 docker compose --env-file .env --env-file "$HOME\.neuro-air\admin.env" run --rm api uv run pytest -q
-# 316 passed, 1 skipped in 25.20s (api container, after rebuilding the image
+# 323 passed, 1 skipped in 25.31s (api container, after rebuilding the image
 # from the current tree; the stale image still reported 238/1)
 ```
 
-Frozen evaluation checks:
+Frozen evaluation and evidence checks:
 
 ```powershell
 uv run python evals/compare_v5.py --pair runs/v5/qwen14b_test_single runs/v5/qwen14b_test_multi
-uv run pytest -q tests/test_paper_hk12.py tests/test_paper_vendor.py
+uv run python scripts/export_case_csv.py
+uv run pytest -q tests/test_evidence_csv.py tests/test_paper_hk12.py tests/test_paper_vendor.py
 uv run python evals/paper_hk12.py --smoke
-uv run python evals/paper_hk12.py --arm single --repeats 3 --out runs/paper_hk12/qwen14b_single --model qwen2.5-coder:14b --base-url http://127.0.0.1:11434/v1
+uv run python evals/paper_hk12.py --arm single --repeats 3 --out runs/paper_hk12/qwen14b_single_crosswalk --model qwen2.5-coder:14b --base-url http://127.0.0.1:11434/v1
 ```
+
+`docs/results/v5_test_cases.csv`, `docs/results/v5_dev_cases.csv` and
+`docs/EVIDENCE_MANIFEST.md` are committed. The archive path and SHA256 are in the
+manifest; the zip itself is outside the repository by instruction.
 
 Five-step demo:
 
@@ -535,18 +553,20 @@ Start-Process http://localhost:8000/
   pre-declared ceiling applied. No harder-headroom benchmark, second local
   backbone, paper five-model line-up or strong model was run, so the paper's
   90-task gain remains unverified here.
-- HK-12 paired multi is skipped: the run was stopped at 10/36 case files under
-  the ~2-hour Step 4 cap, with no multi `run.json`. Only the completed single
-  arm (11/36) is reported; no HK-12 win, loss, significance or paired ceiling
-  claim is made from the partial multi files.
-- The machine-level Docker `~/.docker/config.json` again showed
-  `credsStore: "desktop"` during the final image rebuild; the key was removed
-  locally (outside the repo) and the rebuild succeeded. No credential file is
-  tracked.
+- HK-12 paired multi is skipped: the original attempt stopped at 10/36 case
+  files under the ~2-hour Step 4 cap, with no multi `run.json`, and it was not
+  rerun. Only the completed single arms are reported: raw-ID 11/36 (an adapter
+  artifact) and crosswalked 14/36. No HK-12 win, loss, significance or paired
+  ceiling claim is made from the partial multi files.
+- The cause of the remaining `hk_1_1` and `hk_1_9` failures is not established.
+  Their repeat-wise first failing checks are recorded in
+  `docs/PAPER_HK12_ANCHOR.md`; no further prompt or validator tuning was done.
 - Linux was verified inside the `api` container, not on a separate bare-metal
   Linux host. Windows was verified on the host.
-- The local Docker config had a stale `credsStore: "desktop"`; removing it was
-  a machine-level fix outside the repo. No credential file is tracked.
+- An earlier rebuild required a machine-level fix: the local Docker
+  `~/.docker/config.json` had `credsStore: "desktop"`, which was removed outside
+  the repo. Before this session's rebuild it was checked as absent; the image
+  rebuilt and the suite reran successfully. No credential file is tracked.
 - `scripts/dump_db.py` and `scripts/restore_db.py` were added but not executed;
   the existing database volume was reused. Restore is destructive and would
   need a separate confirmation on a real machine.
