@@ -4,6 +4,22 @@ This is the frozen v5 TEST-split result for the local model. It is a completed
 TEST run, not a DEV tuning result. No prompt, role, scorer, benchmark task,
 question or split definition was changed for this run.
 
+## Evidence in the repository
+
+The raw `runs/` tree is gitignored and is not staged. To make the result
+checkable without the raw folder:
+
+- `docs/results/v5_test_cases.csv` — 398 generated rows (199 single + 199
+  multi) with task id, arm, category, difficulty, pass, `pass_pre_verify`,
+  tokens, seconds, `stall_count`, `verifier_changed` and `infra_failed`.
+- `docs/results/v5_dev_cases.csv` — the same 106-row export for DEV.
+- `scripts/export_case_csv.py` generates both from case JSON; it is not
+  hand-edited.
+- `tests/test_evidence_csv.py` re-derives 182/199, 166/199, 11 wins, 27 losses,
+  90 pre-verifier passes, 77 rescued and 1 broken from the TEST CSV.
+- `docs/EVIDENCE_MANIFEST.md` records the outside-repo zip path, its SHA256 and
+  the SHA256 of every `run.json`. The zip itself is deliberately not staged.
+
 ## Execution and integrity
 
 - Runner: `evals/run_v5.py`, frozen at commit `72d0ec8`.
